@@ -1,4 +1,4 @@
-# turn-level-rewards
+# grpo-turn-level-rewards
 
 Experiments in turn-level reward shaping for GRPO training, built on
 [`trl`](https://github.com/huggingface/trl) and tracked with

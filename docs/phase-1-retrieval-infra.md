@@ -50,11 +50,11 @@ phase's concrete tasks and does not repeat that context.
 
 1. [ ] Install the JDK: `sudo apt install openjdk-21-jdk` (confirmed exact version needed —
        not a guess). Verify with `java -version` reporting `21`.
-2. [ ] Add dependencies to `pyproject.toml`: `pyserini`, `fastapi`, `uvicorn`, `requests`,
-       `huggingface_hub`, `datasets` (`datasets` is likely already needed by other phases too —
-       check before duplicating). A dedicated `retrieval` dependency group is fine if you don't
-       want these bundled with the main training env; earlier dry-run testing showed no
-       dependency conflicts with `torch`/`transformers` either way.
+2. [x] ~~Add dependencies to `pyproject.toml`~~ — already done: `pyserini`, `fastapi`,
+       `uvicorn`, `requests`, `huggingface-hub`, `datasets`, `pydantic` are all in
+       `pyproject.toml`/`uv.lock` and pass `ty`/`ruff` clean. Run `uv sync` to make sure your
+       `.venv` actually has them installed (adding to `pyproject.toml` alone doesn't install
+       anything into a fresh checkout).
 3. [ ] Run `bash scripts/setup_retrieval.sh` (defaults to downloading into `data/wiki18/`,
        already `.gitignore`d). Read its output carefully — it will tell you whether the corpus
        download happened and print the exact `retrieval_server.py` launch command to use.

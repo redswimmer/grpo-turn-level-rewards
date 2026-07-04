@@ -951,6 +951,49 @@ wheels = [
 ]
 
 [[package]]
+name = "grpo-turn-level-rewards"
+version = "0.1.0"
+source = { virtual = "." }
+dependencies = [
+    { name = "datasets" },
+    { name = "fastapi" },
+    { name = "huggingface-hub" },
+    { name = "pydantic" },
+    { name = "pyserini" },
+    { name = "requests" },
+    { name = "trackio" },
+    { name = "trl" },
+    { name = "uvicorn" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "pre-commit" },
+    { name = "ruff" },
+    { name = "ty" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "datasets", specifier = ">=5.0.0" },
+    { name = "fastapi", specifier = ">=0.139.0" },
+    { name = "huggingface-hub", specifier = ">=1.22.0" },
+    { name = "pydantic", specifier = ">=2.13.4" },
+    { name = "pyserini", specifier = ">=2.3.0" },
+    { name = "requests", specifier = ">=2.34.2" },
+    { name = "trackio", specifier = ">=0.29.0" },
+    { name = "trl", specifier = ">=1.7.1" },
+    { name = "uvicorn", specifier = ">=0.50.0" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "pre-commit", specifier = ">=4.6.0" },
+    { name = "ruff", specifier = ">=0.15.20" },
+    { name = "ty", specifier = ">=0.0.56" },
+]
+
+[[package]]
 name = "h11"
 version = "0.16.0"
 source = { registry = "https://pypi.org/simple" }
@@ -3226,49 +3269,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/39/74/34b50058ea7d8c2a1c0bec49dcb6dda4ac929589bace52522fe8d1487306/trl-1.7.1.tar.gz", hash = "sha256:36609abf76f61d305d4c8a8ad5c903b79f177b7e5c4ec1014c4ade4cb7ac4a43", size = 691318, upload-time = "2026-07-04T04:03:09.841Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/82/34/24d445a6156db4a9b976b1ab4aefc5e8ee8046da95524768fb78a0f705f0/trl-1.7.1-py3-none-any.whl", hash = "sha256:d5ef8ac38c64746eebf23005dccefc6488874643039d0b4a20f036e1124115b4", size = 842380, upload-time = "2026-07-04T04:03:08.223Z" },
-]
-
-[[package]]
-name = "turn-level-rewards"
-version = "0.1.0"
-source = { virtual = "." }
-dependencies = [
-    { name = "datasets" },
-    { name = "fastapi" },
-    { name = "huggingface-hub" },
-    { name = "pydantic" },
-    { name = "pyserini" },
-    { name = "requests" },
-    { name = "trackio" },
-    { name = "trl" },
-    { name = "uvicorn" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "pre-commit" },
-    { name = "ruff" },
-    { name = "ty" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "datasets", specifier = ">=5.0.0" },
-    { name = "fastapi", specifier = ">=0.139.0" },
-    { name = "huggingface-hub", specifier = ">=1.22.0" },
-    { name = "pydantic", specifier = ">=2.13.4" },
-    { name = "pyserini", specifier = ">=2.3.0" },
-    { name = "requests", specifier = ">=2.34.2" },
-    { name = "trackio", specifier = ">=0.29.0" },
-    { name = "trl", specifier = ">=1.7.1" },
-    { name = "uvicorn", specifier = ">=0.50.0" },
-]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "pre-commit", specifier = ">=4.6.0" },
-    { name = "ruff", specifier = ">=0.15.20" },
-    { name = "ty", specifier = ">=0.0.56" },
 ]
 
 [[package]]
