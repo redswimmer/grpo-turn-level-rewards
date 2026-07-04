@@ -103,7 +103,7 @@ def build_app(index_path: str, corpus_path: str | None, default_topk: int) -> Fa
         else:
             if corpus is None:
                 raise RuntimeError("corpus not loaded despite contains_doc=False")
-            docs = [corpus[int(hit.docid)] for hit in hits]
+            docs = [parse_title_text(corpus[int(hit.docid)]["contents"]) for hit in hits]
         return (docs, scores) if return_scores else docs
 
     @app.post("/retrieve")

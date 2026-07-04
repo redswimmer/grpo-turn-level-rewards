@@ -14,11 +14,20 @@ import sys
 
 import requests
 
-# A few titles CLAUDE.md already confirmed exist in wiki-18 (from the 322/400 gold-title sample
-# verified in Phase 0 research), and one confirmed-absent title ("Calgary" — see CLAUDE.md's
-# "Confirmed ... title alignment is ~80%, not 100%" note) to check the server degrades
-# gracefully on a real corpus gap instead of erroring.
-KNOWN_PRESENT_TITLES = ["Arthur's Magazine", "First for Women", "127 Hours", "Absinthe"]
+# Titles confirmed directly against the actual downloaded wiki-18 corpus+index (not just the
+# Phase 0 research sample -- two of that sample's four examples, "Arthur's Magazine" and "First
+# for Women", turned out not to exist as exact titles in this corpus, and "Absinthe" exists but
+# doesn't rank top-3 for its own title query since it's split into 61 near-duplicate-titled
+# chunks -- see docs/phase-1-retrieval-infra.md Handoff notes). Each title below was verified
+# live to both exist and rank top-3 for its own title-as-query.
+KNOWN_PRESENT_TITLES = [
+    "127 Hours",
+    "Big Stone Gap (film)",
+    "Peter Schmeichel",
+    "Virginia Commonwealth University",
+]
+# "Calgary" — see CLAUDE.md's "Confirmed ... title alignment is ~80%, not 100%" note — to check
+# the server degrades gracefully on a real corpus gap instead of erroring.
 KNOWN_ABSENT_TITLE = "Calgary"
 
 
