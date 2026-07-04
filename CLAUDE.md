@@ -1,4 +1,4 @@
-# GRPO Agent Turn Level Rewards
+# Outcome-Only vs. Merged-Reward GRPO
 
 ## Goal
 

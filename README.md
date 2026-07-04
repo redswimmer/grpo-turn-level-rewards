@@ -1,4 +1,4 @@
-# GRPO Turn Level Rewards
+# Outcome-Only vs. Merged-Reward GRPO
 
 Experiments in turn-level reward shaping for GRPO training, built on
 [`trl`](https://github.com/huggingface/trl) and tracked with
