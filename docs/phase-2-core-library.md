@@ -14,15 +14,37 @@ concrete tasks.
 
 ## Prerequisites (entry state)
 
-- Phase 1's retrieval server **contract** must be finalized (request/response JSON shape) — this
-  phase only needs the documented contract, not a live running server, since tests inject a fake
-  retriever at that seam. If Phase 1 isn't fully done yet but the contract in CLAUDE.md is
-  considered stable, this phase can start in parallel; check `docs/phase-1-retrieval-infra.md`'s
-  Handoff notes for any contract changes discovered during that phase before assuming the
-  contract in CLAUDE.md is exactly right.
+- **Phase 1 is complete.** The retrieval server is verified working — see
+  `docs/phase-1-retrieval-infra.md`'s Handoff notes for the exact launch command (needed later
+  for the live smoke test in Phase 4, not this phase), the `contains_doc=False` result, and a
+  `retrieval_server.py` bug that was found and fixed there.
+- This phase only needs the documented request/response **contract** (JSON shape), not a live
+  running server — tests inject a fake retriever at that seam (see CLAUDE.md's "Guiding
+  principles", point 1). **The contract itself did not change** during Phase 1 — the bug fixed
+  there made the corpus-fallback path match the contract already documented in CLAUDE.md, not a
+  new one — but skim those Handoff notes once anyway before assuming the CLAUDE.md contract is
+  exactly right, since that's where any such change would have been recorded.
+- Also worth knowing from Phase 1 (not a contract change, but relevant if this phase's tests use
+  realistic fixture data): the wiki-18 corpus has real gaps and near-duplicate titles — e.g. the
+  `retrieval_fraction` accounting in `env.py`'s tests should use fixture titles/documents that
+  look like genuine wiki-18 rows (`{title, text, contents}` with `contents = '"<Title>"\n<text>'`
+  per CLAUDE.md's confirmed schema), not assume every gold title is guaranteed retrievable.
 
 ## Tasks
 
+- [ ] **Package plumbing (do this first, before writing any reward/env logic)**: this repo is
+      currently a uv *virtual* project — `pyproject.toml` has no `[build-system]` table, and
+      `uv.lock` has `source = { virtual = "." }` — so there is no installed `turn_level_rewards`
+      package yet and `src/` doesn't exist. Before `import turn_level_rewards` (from tests, or
+      later from `train.py`) can work, you need to make this project installable:
+      - Add a `[build-system]` table (`hatchling` is the natural choice — it auto-detects a
+        `src/<project-name-with-underscores>/` layout with no extra config needed beyond that).
+      - Create `src/turn_level_rewards/__init__.py`.
+      - Run `uv sync` again and confirm `uv run python -c "import turn_level_rewards"` succeeds,
+        and that `uv.lock`'s `source` for this package is no longer `virtual`.
+      - Add `pytest` to `[dependency-groups] dev` in `pyproject.toml` (it is not there yet —
+        confirmed by grepping `pyproject.toml`/`uv.lock`, don't assume it's already available)
+        and run `uv sync` once more.
 - [ ] `src/turn_level_rewards/metrics.py`: `normalize_answer`, `exact_match`, `f1_score`
       (SQuAD-style, stdlib only — no new dependencies for this file).
 - [ ] `src/turn_level_rewards/env.py`: `SearchEnv` class.
@@ -65,7 +87,7 @@ concrete tasks.
 
 ## Exit criteria (all must be true before handing off)
 
-- [ ] `pytest tests/unit/` passes, completes in well under a few seconds total, touches no
+- [ ] `uv run pytest tests/unit/` passes, completes in well under a few seconds total, touches no
       network/GPU/live server.
 - [ ] `ruff check` and `ty check` are clean.
 - [ ] Every seam (retrieval HTTP call) is genuinely injectable — grep for any stray hardcoded
