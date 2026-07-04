@@ -6,9 +6,13 @@ Experiments in turn-level reward shaping for GRPO training, built on
 
 ## What this compares
 
-A simplified reproduction of one ablation from ["Reinforcing Multi-Turn Reasoning in LLM Agents
-via Turn-Level Reward Design"](https://arxiv.org/abs/2505.11821) (arXiv:2505.11821) — specifically
-its Appendix E case study, stated in the paper's own terms:
+Does rewarding a search agent's intermediate steps — not just its final answer — help it learn
+faster and more reliably? This repo tests that with GRPO, on a multi-turn Wikipedia-search agent,
+by training two otherwise-identical models that differ only in reward shaping.
+
+Concretely, it's a simplified reproduction of one ablation from ["Reinforcing Multi-Turn
+Reasoning in LLM Agents via Turn-Level Reward Design"](https://arxiv.org/abs/2505.11821)
+(arXiv:2505.11821) — specifically its Appendix E case study, stated in the paper's own terms:
 
 - **`GRPO-OR`** (`--condition outcome_only`): reward = final-answer correctness + format only.
 - **`GRPO-MR`** (`--condition turn_level`): the same, plus a bonus for surfacing a real
