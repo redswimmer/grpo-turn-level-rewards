@@ -28,6 +28,9 @@ dev = [
     "ty>=0.0.56",
 ]
 
+[tool.uv]
+default-groups = []
+
 [tool.ruff]
 target-version = "py313"
 line-length = 100

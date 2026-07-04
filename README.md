@@ -1,54 +1,52 @@
 # Outcome-Only vs. Merged-Reward GRPO
 
-Experiments in turn-level reward shaping for GRPO training, built on
-[`trl`](https://github.com/huggingface/trl) and tracked with
-[`trackio`](https://github.com/gradio-app/trackio).
+A small-scale experiment testing whether rewarding an AI agent's intermediate actions — not just
+its final answer — helps it learn faster and more reliably.
 
 ## What this compares
 
-Does rewarding a search agent's intermediate steps — not just its final answer — help it learn
-faster and more reliably? This repo tests that with GRPO, on a multi-turn Wikipedia-search agent,
-by training two otherwise-identical models that differ only in reward shaping.
+This repo tests that question with GRPO, on a multi-turn Wikipedia-search agent, by training two
+otherwise-identical models that differ only in reward shaping.
 
 Concretely, it's a simplified reproduction of one ablation from ["Reinforcing Multi-Turn
 Reasoning in LLM Agents via Turn-Level Reward Design"](https://arxiv.org/abs/2505.11821)
 (arXiv:2505.11821) — specifically its Appendix E case study, stated in the paper's own terms:
 
-- **`GRPO-OR`** (`--condition outcome_only`): reward = final-answer correctness + format only.
-- **`GRPO-MR`** (`--condition turn_level`): the same, plus a bonus for surfacing a real
-  supporting-fact passage during search.
+- **`GRPO-OR`** (Outcome Reward): reward = final-answer correctness + format only.
+- **`GRPO-MR`** (Merged Reward): the same, plus a bonus for surfacing a real supporting-fact
+  passage during search.
 
-Both run the same multi-turn Wikipedia-search agent under plain, unmodified GRPO (TRL's
-`GRPOTrainer`) — the only difference between the two runs is which reward functions are summed;
-the RL algorithm and advantage estimation are identical in both. The paper's other two
-algorithms — `MT-GRPO` (true per-turn advantage estimation) and `PPO`/`MT-PPO` (critic + GAE) —
-are explicitly out of scope for this pass. See `CLAUDE.md`'s Goal section for the full reasoning.
+Both conditions run the exact same multi-turn Wikipedia-search agent and the exact same
+underlying RL algorithm — only the reward signal changes between the two training runs. The
+paper describes two further variants, `MT-GRPO` and `PPO`/`MT-PPO`, that go further by changing
+the *algorithm* itself, not just the reward — those are out of scope for this pass. See
+`CLAUDE.md` for what they are and why they're not attempted here.
 
 ## Quick Start
 
-Requires Python 3.13+, [`uv`](https://docs.astral.sh/uv/), and a JDK 21 (needed
-by the retrieval server's Lucene bridge).
+### Prerequisites
+
+- Python 3.13+
+- [`uv`](https://docs.astral.sh/uv/)
+- JDK 21 (needed by the retrieval server's Lucene bridge)
 
 ```bash
 uv sync
+sudo apt install openjdk-21-jdk
 ```
 
 ### Retrieval server
 
-Training and evaluation query a local BM25 retrieval server over the real
-wiki-18 Wikipedia dump (see `CLAUDE.md`'s "Why this design" section for why).
-Set it up once:
+Training and evaluation search a local BM25 server backed by the real wiki-18
+Wikipedia dump (~21M passages). Set it up once:
 
 ```bash
-sudo apt install openjdk-21-jdk   # or your OS's JDK 21 equivalent; verify with `java -version`
-uv sync
 bash scripts/setup_retrieval.sh   # downloads the wiki-18 BM25 index (+corpus if needed) into data/wiki18/
 ```
 
-`setup_retrieval.sh` prints the exact `retrieval_server.py` launch command to
-use next (it depends on whether the downloaded index embeds raw documents —
-for this project's confirmed download, it does not, so the corpus download is
-needed too):
+The script downloads the index, checks whether it also needs the separate
+corpus file, and prints the exact command to launch the server — something
+like:
 
 ```bash
 uv run python scripts/retrieval_server.py \
@@ -57,47 +55,21 @@ uv run python scripts/retrieval_server.py \
     --port 8000
 ```
 
-Run it in the background or a separate terminal — it needs to stay up for the
-rest of setup, and later for training/evaluation. Verify it's working:
+Run that (in the background or a separate terminal — it needs to stay up for
+the rest of setup and for training/evaluation later), then confirm it's
+working:
 
 ```bash
 uv run python scripts/verify_retrieval.py
 ```
 
-This should print `PASS: retrieval server is up, wired correctly, and returns
-real documents.` See `docs/phase-1-retrieval-infra.md`'s Handoff notes for
-details on what was verified and a couple of corpus quirks worth knowing
-about.
+```
+PASS: retrieval server is up, wired correctly, and returns real documents.
+```
 
 _No training entry point yet — usage instructions will land here once
 `train.py` is added._
 
 ## Contributing
 
-Install the git hooks (runs `ruff` and `ty` checks locally before each commit):
-
-```bash
-uv run pre-commit install
-```
-
-You can also run all checks manually at any time, against every file:
-
-```bash
-uv run pre-commit run --all-files
-```
-
-### Running quality gates directly
-
-For faster iteration, you can run the individual tools without going through
-`pre-commit`:
-
-```bash
-# Lint (add --fix to auto-fix what's fixable)
-uv run ruff check .
-
-# Format (drop --check to apply formatting instead of just checking it)
-uv run ruff format --check .
-
-# Type check
-uv run ty check
-```
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) for dev setup, quality gates, and running tests.
