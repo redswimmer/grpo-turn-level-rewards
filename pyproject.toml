@@ -5,8 +5,15 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
+    "datasets>=5.0.0",
+    "fastapi>=0.139.0",
+    "huggingface-hub>=1.22.0",
+    "pydantic>=2.13.4",
+    "pyserini>=2.3.0",
+    "requests>=2.34.2",
     "trackio>=0.29.0",
     "trl>=1.7.1",
+    "uvicorn>=0.50.0",
 ]
 
 [dependency-groups]
