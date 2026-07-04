@@ -2,21 +2,42 @@
 
 ## Goal
 
-Simplified reproduction of the core ablation in **"Reinforcing Multi-Turn Reasoning in LLM
-Agents via Turn-Level Reward Design"** (arXiv:2505.11821): train a multi-turn search agent
-with GRPO under two reward conditions that are identical except for reward shaping, and compare
-them.
+Simplified reproduction of one specific ablation from **"Reinforcing Multi-Turn Reasoning in LLM
+Agents via Turn-Level Reward Design"** (arXiv:2505.11821) — namely its **Appendix E case study**,
+stated in the paper's own terms: **`GRPO-OR` vs `GRPO-MR`**.
 
-- **outcome_only**: reward = format-compliance + final-answer correctness (EM/F1). Sparse,
-  terminal-only signal.
-- **turn_level**: reward = format + outcome + a bonus for surfacing a real supporting-fact
-  passage during search. Same trajectory shape, denser signal.
+- **`GRPO-OR`** (Outcome Reward; this repo's `--condition outcome_only`): reward =
+  format-compliance + final-answer correctness (EM/F1). Sparse, terminal-only signal.
+- **`GRPO-MR`** (Merged Reward; this repo's `--condition turn_level`): reward = format + outcome
+  + a bonus for surfacing a real supporting-fact passage during search. Same trajectory shape,
+  denser signal — but still summed into **one trajectory-level scalar**, scored by GRPO's
+  standard, unmodified group-relative advantage (Eq. 4 in the paper).
 
 Both conditions use the **same multi-turn agent** (same tool-calling mechanics, same max search
-turns). The only variable is which reward functions are summed. This is *not* a single-turn vs.
-multi-turn comparison — it's sparse vs. dense reward on top of an identical multi-turn
-architecture, which is what the paper itself ablates. GRPO's group-relative advantage math does
-not need to change between conditions; only `reward_funcs` differs.
+turns) and the **same RL algorithm** (plain GRPO, no modifications). The only variable is which
+reward functions are summed. This is *not* a single-turn vs. multi-turn comparison — it's sparse
+vs. dense reward on top of an identical multi-turn architecture and identical advantage
+estimation, which is exactly what the paper's own `GRPO-OR`/`GRPO-MR` ablation isolates.
+
+### Explicitly out of scope (and why)
+
+The paper proposes two further algorithms beyond `GRPO-OR`/`GRPO-MR`; neither is attempted here:
+
+- **`MT-GRPO`** — the paper's actual turn-level credit-assignment contribution: a *separate*
+  advantage computed per turn via extra per-state rollouts (Eq. 5, Appendix D), instead of one
+  trajectory-wide advantage. Out of scope because TRL's `GRPOTrainer` has no supported hook to
+  override its built-in advantage computation with a custom per-turn one — doing this for real
+  means patching non-public trainer internals, not a documented extension point.
+- **`PPO` / `MT-PPO`** — the paper's actual best-performing, most-benchmarked method (all of
+  Table 2's real numbers are PPO/MT-PPO, not MT-GRPO). Out of scope because TRL's `PPOTrainer` is
+  experimental and has **no multi-turn tool-calling support at all** (no `environment_factory`
+  equivalent — confirmed directly against TRL's current docs). A real MT-PPO would mean
+  hand-building the multi-turn rollout loop, a critic/value head, and GAE with turn-boundary
+  reward placement (Eq. 9) essentially from scratch — a much larger lift than this pass's scope.
+
+Both are legitimate follow-on directions, not ruled out permanently — just not part of this
+comparison. If either is picked up later, it should get its own phase doc under `docs/` rather
+than being folded into the existing `outcome_only`/`turn_level` roadmap.
 
 ## Why this design (retrieval backend choice)
 
@@ -143,6 +164,11 @@ vLLM for a first pass; vLLM colocate mode available later if generation throughp
 
 ## Reward design (the crux decision)
 
+**Terminology**: `outcome_only` below is the paper's `GRPO-OR`; `turn_level` is the paper's
+`GRPO-MR`. See the Goal section's "Explicitly out of scope" note for why this stops short of the
+paper's `MT-GRPO` (no per-turn advantage estimation — both conditions use one trajectory-level
+GRPO advantage).
+
 Shared outcome component (identical in both conditions):
 - `format_reward`: small ±0.1 nudge for a parseable final-answer tag.
 - `outcome_reward`: SQuAD-style F1 (0 to 1) + 0.5 bonus for exact match, maxed over
@@ -266,7 +292,7 @@ phase's "Handoff notes" section** — that's the actual handoff mechanism betwee
 | # | Phase | Doc | Status |
 |---|---|---|---|
 | 1 | Retrieval infra: JDK, wiki-18 download, retrieval server | `docs/phase-1-retrieval-infra.md` | **Done** — server running, `verify_retrieval.py` passes; see phase doc's Handoff notes for the launch command, a `retrieval_server.py` bug fix, and a correction to this file's "confirmed present" title examples |
-| 2 | Core library: `env.py`, `rewards.py`, `metrics.py` + `tests/unit/` | `docs/phase-2-core-library.md` | Not started |
+| 2 | Core library: `env.py`, `rewards.py`, `metrics.py` + `tests/unit/` | `docs/phase-2-core-library.md` | **Done** (on `phase-2-core-library` branch, not yet merged) — `scripts/verify_phase2.py` passes; see phase doc's Handoff notes for the confirmed `reset()` contract and a flagged Phase 3/4 gap (dataset's `prompt` column needs replacing) |
 | 3 | Data pipeline: `data.py` | `docs/phase-3-data-pipeline.md` | Not started |
 | 4 | `train.py` + live smoke test | `docs/phase-4-training-smoke-test.md` | Not started |
 | 5 | Full training runs (both conditions) | `docs/phase-5-full-training-runs.md` | Not started |

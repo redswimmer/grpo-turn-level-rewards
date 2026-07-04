@@ -22,6 +22,18 @@ a `golden_answers` **list**, not a single string).
 
 ## Tasks
 
+- [ ] **Replace the dataset's `prompt` column (known gap, flagged in Phase 2's Handoff notes —
+      do this first, it affects the row-formatting helper below).** `PeterJinGo/nq_hotpotqa_train`'s
+      own `prompt` column is Search-R1's original **text-tag** ReAct prompt
+      (`<search>...</search>` → `<information>...</information>` → `<answer>...</answer>`), which
+      assumes a regex-parsed rollout loop. This repo uses TRL's native `environment_factory`
+      tool-calling instead (structured `tool_calls`, not text tags) — so the dataset's own
+      `prompt` column must be discarded and replaced with a system/user prompt that teaches native
+      tool use (describe the `search` tool, instruct the model to reason and call it as needed,
+      and to give its final answer wrapped in `<answer>...</answer>` — that one convention is kept,
+      since `rewards.py`'s `_extract_answer` already depends on it). Write this as a shared
+      row-formatting step so both `load_train_dataset` and `load_eval_dataset` produce rows with
+      this new prompt, not the dataset's original one.
 - [ ] `src/turn_level_rewards/data.py`:
       - `load_train_dataset(n: int | None, seed: int = 42)` — loads
         `PeterJinGo/nq_hotpotqa_train`, `default` config, `train` split; filters to

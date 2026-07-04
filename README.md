@@ -4,6 +4,22 @@ Experiments in turn-level reward shaping for GRPO training, built on
 [`trl`](https://github.com/huggingface/trl) and tracked with
 [`trackio`](https://github.com/gradio-app/trackio).
 
+## What this compares
+
+A simplified reproduction of one ablation from ["Reinforcing Multi-Turn Reasoning in LLM Agents
+via Turn-Level Reward Design"](https://arxiv.org/abs/2505.11821) (arXiv:2505.11821) — specifically
+its Appendix E case study, stated in the paper's own terms:
+
+- **`GRPO-OR`** (`--condition outcome_only`): reward = final-answer correctness + format only.
+- **`GRPO-MR`** (`--condition turn_level`): the same, plus a bonus for surfacing a real
+  supporting-fact passage during search.
+
+Both run the same multi-turn Wikipedia-search agent under plain, unmodified GRPO (TRL's
+`GRPOTrainer`) — the only difference between the two runs is which reward functions are summed;
+the RL algorithm and advantage estimation are identical in both. The paper's other two
+algorithms — `MT-GRPO` (true per-turn advantage estimation) and `PPO`/`MT-PPO` (critic + GAE) —
+are explicitly out of scope for this pass. See `CLAUDE.md`'s Goal section for the full reasoning.
+
 ## Quick Start
 
 Requires Python 3.13+, [`uv`](https://docs.astral.sh/uv/), and a JDK 21 (needed
