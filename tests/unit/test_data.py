@@ -168,6 +168,23 @@ def test_load_train_dataset_n_none_returns_all_filtered_rows():
     assert len(ds) == 2
 
 
+def test_load_train_dataset_pins_train_parquet_to_avoid_broken_test_split():
+    # Regression test: datasets.load_dataset(..., split="train") still runs
+    # download_and_prepare() over every split the repo exposes (including this repo's
+    # already-documented broken test.parquet) before slicing out "train" -- so
+    # load_train_dataset must pin data_files to train.parquet explicitly, never relying on
+    # split="train" alone to avoid touching the broken split. See CLAUDE.md's Dataset section.
+    captured_kwargs = {}
+
+    def load_dataset_fn(*args, **kwargs):
+        captured_kwargs.update(kwargs)
+        return datasets.Dataset.from_list(TRAIN_ROWS)
+
+    load_train_dataset(None, load_dataset_fn=load_dataset_fn)
+
+    assert captured_kwargs.get("data_files") == {"train": "train.parquet"}
+
+
 def test_load_eval_dataset_wraps_answer_into_golden_answers_list():
     ds = load_eval_dataset(None, load_dataset_fn=_fake_loader(EVAL_ROWS))
 
