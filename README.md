@@ -28,11 +28,21 @@ in multi-turn agent RL, not an artifact of one algorithm's mechanics.
 Concretely, this is a simplified reproduction of two ablations from ["Reinforcing Multi-Turn
 Reasoning in LLM Agents via Turn-Level Reward Design"](https://arxiv.org/abs/2505.11821)
 (arXiv:2505.11821): its Appendix E GRPO case study (`GRPO-OR`/`GRPO-MR`), and its main-results PPO
-comparison (`PPO`/`MT-PPO`). See `CLAUDE.md`'s Roadmap for what's built and what's still in
-progress. (`MT-GRPO`, a further turn-level credit-assignment scheme specific to GRPO, remains out
-of scope — see `CLAUDE.md` for why.)
+comparison (`PPO`/`MT-PPO`).
 
-## Quick Start
+## Results
+
+_No runs have completed yet — this section fills in as each one finishes, so a reader can learn
+what was found without running anything themselves._
+
+## Roadmap
+
+- **GRPO: outcome-only vs. merged-reward** — training infrastructure built; full runs not yet run.
+- **PPO: outcome-only vs. merged-reward** — design complete; not yet started.
+- **LLM-as-judge reward** (an alternative to exact-match/F1 scoring, explored on top of the PPO
+  comparison) — not yet started.
+
+## Reproducing this
 
 ### Prerequisites
 
@@ -86,8 +96,7 @@ uv run python -m turn_level_rewards.train --condition turn_level
 
 The bare invocation above (no extra flags) runs at smoke-test scale — 8 rows, 2 steps, a real
 `Qwen/Qwen3.5-0.8B` model against the retrieval server started above. Pass `--train-size`,
-`--max-steps`, `--num-generations`, etc. explicitly for a full-scale run; see
-`docs/phase-5-full-training-runs.md` for a paper-grounded example configuration. Both conditions
+`--max-steps`, `--num-generations`, etc. explicitly for a full-scale run. Both conditions
 log to the same [trackio](https://github.com/gradio-app/trackio) project
 (`turn-level-rewards`) — run `trackio show --project turn-level-rewards` to view.
 
