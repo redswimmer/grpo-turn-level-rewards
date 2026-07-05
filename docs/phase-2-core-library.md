@@ -131,5 +131,4 @@ concrete tasks.
   `"Peter Schmeichel"`, `"Virginia Commonwealth University"` — the four titles Phase 1's handoff
   notes verified live against the real corpus, not the CLAUDE.md examples that turned out not to
   exist.
-- **Not yet done**: this phase's commits live on the `phase-2-core-library` branch, not merged to
-  `main` yet.
+- **Merged to `main` via PR #2.**

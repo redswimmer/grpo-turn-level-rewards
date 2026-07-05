@@ -17,7 +17,16 @@ actually read the live completions transcripts, not just check for a clean exit 
 
 - Phase 1: retrieval server running and reachable at a known URL.
 - Phase 2: `env.py`, `rewards.py`, `metrics.py` implemented and unit-tested.
-- Phase 3: `data.py` implemented and unit-tested.
+- **Phase 3 is complete and merged** — `src/turn_level_rewards/data.py` exists with
+  `load_train_dataset(n: int | None, seed: int = 42, *, load_dataset_fn=...) -> Dataset` and
+  `load_eval_dataset(n: int | None, seed: int = 42, *, load_dataset_fn=...) -> Dataset`
+  (`load_dataset_fn` is an injectable seam for tests — call both with no third argument to get the
+  real loader). Both return rows with an identical column contract: `prompt`
+  (`list[{"role": "system"/"user", "content": str}]`, already conversational-format and ready to
+  hand straight to `GRPOTrainer`), `question` (`str`), `golden_answers` (`list[str]`), `metadata`
+  (`dict`, consumed by `SearchEnv.reset(self, metadata, **kwargs)`). See
+  `docs/phase-3-data-pipeline.md`'s Handoff notes for the full contract and a real bug fix
+  (`data_files` pin) that's already baked into these functions — nothing extra needed here.
 - JDK + pyserini installed (Phase 1).
 
 ## Tasks
@@ -27,9 +36,16 @@ actually read the live completions transcripts, not just check for a clean exit 
         `--max-steps` (all defaulted identically across conditions per CLAUDE.md — the only
         thing that should differ between the two conditions is `--condition` itself).
       - Builds `GRPOTrainer(model="Qwen/Qwen3.5-0.8B", environment_factory=SearchEnv,
-        reward_funcs=get_reward_funcs(condition), train_dataset=..., eval_dataset=...,
+        reward_funcs=get_reward_funcs(condition),
+        train_dataset=data.load_train_dataset(n=train_size, seed=seed),
+        eval_dataset=data.load_eval_dataset(n=eval_size, seed=seed),
         args=GRPOConfig(...))` per the recommended hyperparameters in CLAUDE.md
-        (`num_generations`, `max_tool_calling_iterations`, `beta=0.0`, etc.).
+        (`num_generations`, `beta=0.0`, etc.).
+      - **`GRPOConfig(max_tool_calling_iterations=N)` must be set with `N` strictly above 2** —
+        `data.py`'s system prompt (see Phase 3's Handoff notes) states a soft "at most 2 searches"
+        limit to the model; this hard cutoff exists as a safety net *above* that soft limit so a
+        not-yet-compliant rollout isn't truncated mid-trajectory. CLAUDE.md's "TRL mechanics"
+        section recommends `N=4`.
       - `report_to="trackio"`; project name and per-condition run name per CLAUDE.md's
         "Experiment tracking" section (both conditions in the *same* trackio project).
       - `trackio.alert()` calls for the diagnostic conditions listed in CLAUDE.md (dead reward,
