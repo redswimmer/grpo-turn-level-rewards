@@ -29,10 +29,15 @@ unusual already spotted in the training curves.
       both `evaluate.py` output jsons; produce: (1) overlaid reward-vs-step curves for both
       conditions (stability/convergence-speed comparison), (2) final EM/F1 bar comparison, (3)
       final retrieval-rate bar comparison.
-- [ ] Write up findings in plain language: did `turn_level` show faster/more stable convergence
-      and higher final accuracy than `outcome_only`, as the paper claims? If not, is there a
-      plausible reason given what's already documented in CLAUDE.md (e.g. the ~80% retrieval
-      ceiling, the small training scale relative to the paper, hyperparameter choices)?
+- [ ] Write up findings in plain language, scoped to the specific claim actually being tested:
+      **the paper's own `GRPO-OR` vs `GRPO-MR` ablation (Appendix E)** — not the paper's headline
+      Table 2 numbers, which come from a different algorithm (`MT-PPO`) not attempted here (see
+      CLAUDE.md's Goal section, "Explicitly out of scope"). Did `turn_level` (`GRPO-MR`) show
+      faster/more stable convergence and higher final accuracy than `outcome_only` (`GRPO-OR`), as
+      the paper's Appendix E/Table 5 results show (EM 0.0 → 0.33 in their setup)? If not, is there
+      a plausible reason given what's already documented in CLAUDE.md (e.g. the ~80% retrieval
+      ceiling, the much smaller model/training scale relative to the paper, hyperparameter
+      choices)?
 
 ## Exit criteria (all must be true before handing off — this is the last phase)
 

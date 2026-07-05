@@ -14,14 +14,31 @@ a `golden_answers` **list**, not a single string).
 
 ## Prerequisites (entry state)
 
-- Phase 2's `rewards.py`/`env.py` should exist so this phase's output shape can be checked
-  against what they expect (e.g. field names `golden_answers`, `metadata.supporting_facts`) —
-  but this phase is fairly independent and could be built in parallel if needed; check
-  `docs/phase-2-core-library.md`'s Handoff notes for the exact field names those modules ended up
-  expecting before finalizing this phase's output schema.
+- **Phase 2 is complete and merged to `main`** — `src/turn_level_rewards/{metrics,env,rewards}.py`
+  and `tests/unit/` exist, `scripts/verify_phase2.py` passes. Check
+  `docs/phase-2-core-library.md`'s Handoff notes for the exact field names `env.py`/`rewards.py`
+  ended up expecting (`golden_answers` list, nested `metadata.supporting_facts.title`) before
+  finalizing this phase's output schema — those names are now confirmed, not provisional.
 
 ## Tasks
 
+- [ ] **Replace the dataset's `prompt` column (known gap, flagged in Phase 2's Handoff notes —
+      do this first, it affects the row-formatting helper below).** `PeterJinGo/nq_hotpotqa_train`'s
+      own `prompt` column is Search-R1's original **text-tag** ReAct prompt
+      (`<search>...</search>` → `<information>...</information>` → `<answer>...</answer>`), which
+      assumes a regex-parsed rollout loop. This repo uses TRL's native `environment_factory`
+      tool-calling instead (structured `tool_calls`, not text tags) — so the dataset's own
+      `prompt` column must be discarded and replaced with a system/user prompt that teaches native
+      tool use (describe the `search` tool, instruct the model to reason and call it as needed,
+      and to give its final answer wrapped in `<answer>...</answer>` — that one convention is kept,
+      since `rewards.py`'s `_extract_answer` already depends on it). **State an explicit soft
+      search-count limit in the prompt text itself** (e.g. "at most 2 searches") — CLAUDE.md's
+      "TRL mechanics being relied on" section recommends Phase 4 set
+      `GRPOConfig(max_tool_calling_iterations=N)` as a hard cutoff *above* whatever soft limit the
+      prompt states, so a mismatch here (or no stated limit at all) would leave that hard cutoff
+      with nothing to sit above. Write this as a shared row-formatting step so both
+      `load_train_dataset` and `load_eval_dataset` produce rows with this new prompt, not the
+      dataset's original one.
 - [ ] `src/turn_level_rewards/data.py`:
       - `load_train_dataset(n: int | None, seed: int = 42)` — loads
         `PeterJinGo/nq_hotpotqa_train`, `default` config, `train` split; filters to

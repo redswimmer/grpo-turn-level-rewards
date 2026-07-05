@@ -1,3 +1,7 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
 [project]
 name = "grpo-turn-level-rewards"
 version = "0.1.0"
@@ -19,9 +23,13 @@ dependencies = [
 [dependency-groups]
 dev = [
     "pre-commit>=4.6.0",
+    "pytest>=8.4.0",
     "ruff>=0.15.20",
     "ty>=0.0.56",
 ]
+
+[tool.uv]
+default-groups = []
 
 [tool.ruff]
 target-version = "py313"
@@ -49,3 +57,6 @@ docstring-code-format = true
 
 [tool.ty.environment]
 python-version = "3.13"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/turn_level_rewards"]

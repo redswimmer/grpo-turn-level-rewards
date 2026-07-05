@@ -32,7 +32,7 @@ concrete tasks.
 
 ## Tasks
 
-- [ ] **Package plumbing (do this first, before writing any reward/env logic)**: this repo is
+- [x] **Package plumbing (do this first, before writing any reward/env logic)**: this repo is
       currently a uv *virtual* project — `pyproject.toml` has no `[build-system]` table, and
       `uv.lock` has `source = { virtual = "." }` — so there is no installed `turn_level_rewards`
       package yet and `src/` doesn't exist. Before `import turn_level_rewards` (from tests, or
@@ -45,21 +45,24 @@ concrete tasks.
       - Add `pytest` to `[dependency-groups] dev` in `pyproject.toml` (it is not there yet —
         confirmed by grepping `pyproject.toml`/`uv.lock`, don't assume it's already available)
         and run `uv sync` once more.
-- [ ] `src/turn_level_rewards/metrics.py`: `normalize_answer`, `exact_match`, `f1_score`
+- [x] `src/turn_level_rewards/metrics.py`: `normalize_answer`, `exact_match`, `f1_score`
       (SQuAD-style, stdlib only — no new dependencies for this file).
-- [ ] `src/turn_level_rewards/env.py`: `SearchEnv` class.
-      - `reset(self, context, supporting_facts, **kwargs) -> str | None` — resets all mutable
-        per-episode state (remember: TRL reuses instances from a pool; leftover state from a
-        prior episode is a real bug class here, not a hypothetical).
+- [x] `src/turn_level_rewards/env.py`: `SearchEnv` class.
+      - `reset(self, metadata, **kwargs) -> None` — resets all mutable per-episode state
+        (remember: TRL reuses instances from a pool; leftover state from a prior episode is a
+        real bug class here, not a hypothetical). **As actually built** (see Handoff notes): this
+        takes the row's nested `metadata` dict directly (`metadata["supporting_facts"]["title"]`),
+        not flat `context`/`supporting_facts` kwargs as originally sketched here — confirmed
+        against a real dataset row before implementation, not assumed.
       - `search(self, query: str) -> str` tool method — calls the retrieval server. **The HTTP
         client/call itself must be injectable** (constructor parameter, module-level default
         factory, or similar) — this is the seam principle 1 in CLAUDE.md refers to concretely.
-        Extracts `{title, text}` from each returned document via
-        `contents.split("\n")[0].strip('"')` (matching Search-R1's own parsing, confirmed in
-        CLAUDE.md).
+        **As actually built**: trusts `document["title"]`/`document["text"]` directly from the
+        retrieval server's response — no `contents.split(...)` re-parsing in `env.py`, since the
+        server already does that parsing itself (confirmed by reading `retrieval_server.py`).
       - Tracks `retrieval_fraction` (dedup'd fraction of gold `supporting_facts` titles actually
         surfaced), capped at 1.0.
-- [ ] `src/turn_level_rewards/rewards.py`:
+- [x] `src/turn_level_rewards/rewards.py`:
       - `format_reward(completions, **kwargs)`
       - `outcome_reward(completions, golden_answers, **kwargs)` — SQuAD F1 + EM bonus, maxed over
         the `golden_answers` list (it's a list, not a single string — see CLAUDE.md's Dataset
@@ -69,35 +72,64 @@ concrete tasks.
         list per CLAUDE.md's Reward design section.
       - All functions operate on plain data (strings/dicts/duck-typed objects) — no real
         `GRPOTrainer` or loaded model needed to exercise them.
-- [ ] `tests/unit/test_metrics.py` — EM/F1 sanity pairs (identical strings, partial overlap,
+- [x] `tests/unit/test_metrics.py` — EM/F1 sanity pairs (identical strings, partial overlap,
       case/punctuation/article normalization, fully disjoint answers).
-- [ ] `tests/unit/test_env.py` — inject a **fake retriever** (plain function/dict returning
+- [x] `tests/unit/test_env.py` — inject a **fake retriever** (plain function/dict returning
       canned documents, no real HTTP). Cover: a query that should hit a gold title updates
       `retrieval_fraction`; a query hitting a distractor does not; `reset()` twice in a row on the
       *same* instance with two different fixture rows shows zero state leakage (this directly
       exercises the pooled-instance-reuse behavior from CLAUDE.md's TRL mechanics section);
       `retrieval_fraction` caps at 1.0 even on a duplicate hit.
-- [ ] `tests/unit/test_rewards.py` — fake `completions` (same message-list shape TRL actually
+- [x] `tests/unit/test_rewards.py` — fake `completions` (same message-list shape TRL actually
       uses) + duck-typed `environments` (objects exposing just `.retrieval_fraction`). Cover:
       well-formed correct answer + full retrieval; well-formed correct answer + zero retrieval;
       well-formed wrong answer; malformed/missing `<answer>` tag; hitting the hard tool-call cap
       mid-call (unresolved `tool_calls`, no answer). Assert exact reward values for both
       `get_reward_funcs("outcome_only")` and `get_reward_funcs("turn_level")`.
-- [ ] Run `ruff check` / `ty check` (already configured as dev deps) and fix anything they flag.
+- [x] Run `ruff check` / `ty check` (already configured as dev deps) and fix anything they flag.
 
 ## Exit criteria (all must be true before handing off)
 
-- [ ] `uv run pytest tests/unit/` passes, completes in well under a few seconds total, touches no
+- [x] `uv run pytest tests/unit/` passes, completes in well under a few seconds total, touches no
       network/GPU/live server.
-- [ ] `ruff check` and `ty check` are clean.
-- [ ] Every seam (retrieval HTTP call) is genuinely injectable — grep for any stray hardcoded
+- [x] `ruff check` and `ty check` are clean.
+- [x] Every seam (retrieval HTTP call) is genuinely injectable — grep for any stray hardcoded
       `requests.post`/`httpx` call inside `env.py` that bypasses the injected client; there
       shouldn't be one.
 
 ## Handoff notes
 
-<!-- Fill in after completing this phase: what was actually done, any deviations from the plan
-above, gotchas hit (e.g. TRL API surface that didn't match CLAUDE.md's notes), and anything the
-next phase's agent needs to know. Leave this section for the next fresh agent to read first. -->
-
-(not yet started)
+- **`scripts/verify_phase2.py`** is the exit-criteria gate (mirrors `verify_retrieval.py`'s
+  pattern) — re-run it after any future change to `metrics.py`/`env.py`/`rewards.py`. Confirmed
+  `PASS` as of this handoff.
+- **`SearchEnv.reset()`'s exact contract**: `reset(self, metadata, **kwargs)`, pulling
+  `metadata["supporting_facts"]["title"]`. Confirmed directly against a real streamed row from
+  `PeterJinGo/nq_hotpotqa_train` (a nested `metadata` dict, not a flat `context`/`supporting_facts`
+  kwargs shape) and independently corroborated by Phase 3's own doc, which already commits to
+  nesting `supporting_facts`/`context` under `metadata` for the eval set too. Phase 3's `data.py`
+  needs no special-casing here — just pass `metadata` through as-is.
+- **The retrieval server already parses `title`/`text` server-side**
+  (`parse_title_text()` in `scripts/retrieval_server.py`, confirmed by reading it directly) —
+  `SearchEnv.search()` trusts `document["title"]`/`document["text"]` directly and does no
+  re-parsing of `contents`.
+- **Answer format**: final answers are wrapped in `<answer>...</answer>` in the last assistant
+  message (no unresolved `tool_calls`), checked by `rewards._extract_answer`. This convention is
+  reused, unmodified, from this dataset's own baked-in `prompt` column.
+- **Known gap for Phase 3/4, not fixed here — now tracked explicitly as a task in those phase
+  docs**: `PeterJinGo/nq_hotpotqa_train`'s `prompt` column (confirmed by pulling a real row) is
+  Search-R1's original text-tag ReAct prompt (`<search>...</search>` →
+  `<information>...</information>` → `<answer>...</answer>`), which assumes a regex-based rollout
+  loop — not TRL's native `environment_factory` tool-calling (structured `tool_calls`, not text
+  tags). Phase 3/4 replaces this `prompt` column with one that teaches native tool use, keeping
+  only the `<answer>` convention for the final response. `rewards.py`/`env.py` do not depend on
+  the exact prompt wording, so this did not block Phase 2.
+- **Terminology note (added after Phase 2, during scope-reframing discussion)**: this repo's
+  `outcome_only`/`turn_level` conditions map to the paper's `GRPO-OR`/`GRPO-MR` respectively — see
+  `CLAUDE.md`'s Goal section for the full mapping and what's explicitly out of scope (`MT-GRPO`,
+  `PPO`/`MT-PPO`).
+- **Fixture titles**: `test_env.py` uses `"127 Hours"`, `"Big Stone Gap (film)"`,
+  `"Peter Schmeichel"`, `"Virginia Commonwealth University"` — the four titles Phase 1's handoff
+  notes verified live against the real corpus, not the CLAUDE.md examples that turned out not to
+  exist.
+- **Not yet done**: this phase's commits live on the `phase-2-core-library` branch, not merged to
+  `main` yet.
