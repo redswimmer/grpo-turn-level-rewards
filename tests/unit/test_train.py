@@ -4,7 +4,10 @@ No real GRPOTrainer or model is constructed here -- that integration surface is 
 smoke test (not tests/unit/) covers instead, per CLAUDE.md's Guiding principles.
 """
 
-from turn_level_rewards.train import Condition, build_config
+from types import SimpleNamespace
+from unittest.mock import patch
+
+from turn_level_rewards.train import Condition, TrackioAlertCallback, build_config
 
 
 def _build(condition: Condition, seed: int = 42, max_steps: int = 2, num_generations: int = 2):
@@ -60,3 +63,65 @@ def test_build_config_per_device_train_batch_size_matches_num_generations():
     config = _build("outcome_only", num_generations=8)
     assert config.per_device_train_batch_size == 8
     assert config.generation_batch_size % config.num_generations == 0
+
+
+def _log(callback, step, **fields):
+    state = SimpleNamespace(global_step=step)
+    control = SimpleNamespace(should_training_stop=False)
+    callback.on_log(args=None, state=state, control=control, logs=fields)
+    return control
+
+
+@patch("turn_level_rewards.train.trackio.alert")
+def test_dead_reward_alert_fires_once_past_step_20(mock_alert):
+    callback = TrackioAlertCallback()
+    for step in range(1, 26):
+        _log(callback, step, reward=0.0, frac_reward_zero_std=0.0)
+
+    assert mock_alert.call_count == 1
+    assert mock_alert.call_args.kwargs["title"] == "Dead reward"
+
+
+@patch("turn_level_rewards.train.trackio.alert")
+def test_dead_reward_alert_does_not_fire_if_reward_was_ever_nonzero(mock_alert):
+    callback = TrackioAlertCallback()
+    _log(callback, 1, reward=0.5, frac_reward_zero_std=0.0)
+    for step in range(2, 26):
+        _log(callback, step, reward=0.0, frac_reward_zero_std=0.0)
+
+    assert mock_alert.call_count == 0
+
+
+@patch("turn_level_rewards.train.trackio.alert")
+def test_zero_std_streak_fires_once_and_rearms(mock_alert):
+    callback = TrackioAlertCallback()
+    for step in range(1, 21):
+        _log(callback, step, reward=0.5, frac_reward_zero_std=1.0)
+
+    assert mock_alert.call_count == 1
+    assert mock_alert.call_args.kwargs["title"] == "No learning signal"
+
+    _log(callback, 21, reward=0.5, frac_reward_zero_std=0.5)  # streak breaks
+    for step in range(22, 42):
+        _log(callback, step, reward=0.5, frac_reward_zero_std=1.0)  # streak resumes, re-trips
+
+    assert mock_alert.call_count == 2
+
+
+@patch("turn_level_rewards.train.trackio.alert")
+def test_nan_loss_fires_immediately_and_stops_training(mock_alert):
+    callback = TrackioAlertCallback()
+    control = _log(callback, 5, loss=float("nan"), reward=0.5, frac_reward_zero_std=0.5)
+
+    assert mock_alert.call_count == 1
+    assert mock_alert.call_args.kwargs["title"] == "NaN loss"
+    assert control.should_training_stop is True
+
+
+@patch("turn_level_rewards.train.trackio.alert")
+def test_healthy_log_sequence_fires_no_alerts(mock_alert):
+    callback = TrackioAlertCallback()
+    for step in range(1, 31):
+        _log(callback, step, loss=0.5, reward=0.8, frac_reward_zero_std=0.2)
+
+    assert mock_alert.call_count == 0
