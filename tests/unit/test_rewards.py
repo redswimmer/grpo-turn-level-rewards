@@ -1,10 +1,23 @@
 import pytest
-from turn_level_rewards.rewards import get_reward_funcs
+from turn_level_rewards.rewards import (
+    format_reward,
+    get_reward_funcs,
+    outcome_reward,
+    turn_reward,
+)
 
 
 class FakeEnvironment:
     def __init__(self, retrieval_fraction: float) -> None:
         self.retrieval_fraction = retrieval_fraction
+
+
+class _FakeLogMetric:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, float]] = []
+
+    def __call__(self, name: str, value: float) -> None:
+        self.calls.append((name, value))
 
 
 def _search_tool_call(query: str) -> dict:
@@ -114,3 +127,48 @@ def test_get_reward_funcs_turn_level_includes_turn_reward():
 def test_get_reward_funcs_rejects_unknown_condition():
     with pytest.raises(ValueError):
         get_reward_funcs("bogus")  # type: ignore
+
+
+def test_format_reward_logs_format_compliance_rate():
+    log_metric = _FakeLogMetric()
+    completions = [
+        [_answer("127 Hours")],
+        [{"role": "assistant", "content": "no tag here"}],
+    ]
+
+    format_reward(completions=completions, log_metric=log_metric)
+
+    assert log_metric.calls == [
+        ("format_compliance_rate", 1.0),
+        ("format_compliance_rate", 0.0),
+    ]
+
+
+def test_outcome_reward_logs_exact_match_and_f1_per_completion():
+    log_metric = _FakeLogMetric()
+    completions = [[_answer("127 Hours")], [_answer("Peter Schmeichel")]]
+    golden_answers = [["127 Hours"], ["127 Hours"]]
+
+    outcome_reward(completions=completions, golden_answers=golden_answers, log_metric=log_metric)
+
+    assert log_metric.calls == [
+        ("exact_match", 1.0),
+        ("f1", 1.0),
+        ("exact_match", 0.0),
+        ("f1", 0.0),
+    ]
+
+
+def test_turn_reward_logs_unscaled_retrieval_fraction():
+    log_metric = _FakeLogMetric()
+    environments = [
+        FakeEnvironment(retrieval_fraction=1.0),
+        FakeEnvironment(retrieval_fraction=0.5),
+    ]
+
+    turn_reward(environments=environments, log_metric=log_metric)
+
+    assert log_metric.calls == [
+        ("retrieval_fraction", 1.0),
+        ("retrieval_fraction", 0.5),
+    ]
