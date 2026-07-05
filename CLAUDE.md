@@ -154,9 +154,31 @@ vLLM for a first pass; vLLM colocate mode available later if generation throughp
   completion) **only when `environment_factory` is set** — this is how turn-level state
   (e.g. `environment.retrieval_fraction`) gets back to the reward function.
 - `GRPOConfig(max_tool_calling_iterations=N)` is the hard cutoff on tool-calling turns (currently
-  unlimited by default, bounded only by `max_completion_length`). Recommend setting this as a
-  safety net (e.g. `4`) *above* the soft instructed limit given in the prompt (e.g. "at most 2
-  searches") so early, not-yet-compliant rollouts aren't truncated mid-trajectory.
+  unlimited by default, bounded only by `max_completion_length`). **Finalized: `N=4`.**
+  Confirmed directly against TRL's `_tool_call_loop` source
+  (`trl/trainer/grpo_trainer.py`): `iteration_num` increments once per *(execute pending tool
+  calls → generate the model's next turn)* round; the initial pre-tool-call generation doesn't
+  count. So a fully-compliant rollout that does exactly the prompt's soft "at most 2 searches"
+  (see Dataset/Reward design sections) consumes **exactly 2 iterations** and would never hit a
+  cap set to 2 — it needs to be strictly above 2 or compliant rollouts get truncated before they
+  can even answer, silently corrupting the reward signal. `N=4` leaves 2 full rounds of slack
+  above that soft limit, so early-training rollouts that haven't yet learned the "at most 2"
+  instruction (e.g. search 3-4 times) still complete and receive an honest — probably
+  penalized — reward instead of being cut off mid-search with no answer at all. Not set higher
+  than 4: each extra iteration is a full extra generation pass per rollout, and `format_reward`'s
+  `-0.1` penalty for a missing `<answer>` is the right way to unlearn persistent
+  over-searching, not a cutoff patient enough to wait it out.
+- **This repo's "at most 2 searches" is a confirmed, deliberate deviation from the paper**, not
+  an oversight. The paper's own Appendix E.1 (Task Formulation) states its GRPO case study caps
+  the agent at **exactly one** search call before answering ("a simplified two-turn tool-use
+  environment... the agent is allowed to call the Wikipedia search engine at most once before
+  submitting an answer" — verified by fetching the paper's HTML version directly, not assumed
+  from memory). This repo uses 2 instead because HotpotQA is genuinely 2-hop (avg exactly 2.00
+  unique gold supporting-fact titles/row, already confirmed above) — a hard 1-search cap would
+  make it structurally impossible to ever surface both gold passages, capping `retrieval_fraction`
+  at ~50% regardless of policy quality. See
+  `docs/superpowers/specs/2026-07-04-phase-3-data-pipeline-design.md` (lines ~29-30) for where
+  this was first decided.
 - `beta` (KL penalty) defaults to `0.0` in TRL — no reference model needed, saves memory.
 - Multiple `reward_funcs` are summed (or weighted via `reward_weights`); returning `None` from a
   reward function lets it abstain per-example (not needed here — no task-mixing).
