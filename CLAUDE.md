@@ -210,21 +210,22 @@ error. Because GRPO scores one scalar per completed trajectory (no per-timestep 
 this is turn-level credit assignment *via reward density*, not a literal per-step RL change —
 state that explicitly in code comments so it's not mistaken for more than it is.
 
-## Repo layout (planned)
+## Repo layout
 
 ```
 src/turn_level_rewards/
-    env.py             # SearchEnv (environment_factory) - calls the retrieval server over HTTP
-    metrics.py         # normalize_answer / exact_match / f1_score (SQuAD-style, stdlib only)
-    rewards.py         # format_reward, outcome_reward, turn_reward, get_reward_funcs(condition)
-    data.py            # dataset loading/filtering (nq_hotpotqa_train train, hotpot_qa validation)
-    train.py           # CLI: python -m turn_level_rewards.train --condition {outcome_only,turn_level}
-    evaluate.py         # run a trained checkpoint over held-out eval set, write metrics json
+    env.py             # SearchEnv (environment_factory) - calls the retrieval server over HTTP [done]
+    metrics.py         # normalize_answer / exact_match / f1_score (SQuAD-style, stdlib only) [done]
+    rewards.py         # format_reward, outcome_reward, turn_reward, get_reward_funcs(condition) [done]
+    data.py            # dataset loading/filtering (nq_hotpotqa_train train, hotpot_qa validation) [done]
+    train.py           # CLI: python -m turn_level_rewards.train --condition {outcome_only,turn_level} [done]
+    evaluate.py         # run a trained checkpoint over held-out eval set, write metrics json [Phase 6, not yet built]
 scripts/
-    setup_retrieval.sh # download wiki-18 corpus+index, launch the Pyserini retrieval server
-    compare_runs.py    # plot reward/EM/retrieval curves for both conditions
+    setup_retrieval.sh # download wiki-18 corpus+index, launch the Pyserini retrieval server [done]
+    verify_phase{1,2,3,4}.py  # per-phase exit-criteria gates [done]
+    compare_runs.py    # plot reward/EM/retrieval curves for both conditions [Phase 6, not yet built]
 tests/unit/
-    test_env.py / test_rewards.py / test_metrics.py   # no GPU, no live retrieval server needed
+    test_env.py / test_rewards.py / test_metrics.py / test_data.py / test_train.py   # no GPU, no live retrieval server needed [done]
 ```
 
 **Test location is `tests/unit/` only.** Do not add other test tiers (integration tests against
