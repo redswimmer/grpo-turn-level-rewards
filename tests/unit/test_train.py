@@ -68,6 +68,19 @@ def test_build_config_per_device_train_batch_size_matches_num_generations():
     assert config.generation_batch_size % config.num_generations == 0
 
 
+def test_build_config_periodic_eval_and_save_fields():
+    outcome_config = _build("outcome_only")
+    turn_config = _build("turn_level")
+
+    for config in (outcome_config, turn_config):
+        assert config.num_iterations == 2
+        assert config.eval_strategy == "steps"
+        assert config.eval_steps == 20
+        assert config.save_strategy == "steps"
+        assert config.save_steps == 50
+        assert config.save_total_limit == 3
+
+
 def _log(callback, step, **fields):
     state = SimpleNamespace(global_step=step)
     control = SimpleNamespace(should_training_stop=False)

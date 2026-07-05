@@ -32,6 +32,10 @@ def build_config(
     GRPOConfig requires generation_batch_size (which defaults to per_device_train_batch_size *
     num_processes * steps_per_generation) to be evenly divisible by num_generations; setting
     them equal satisfies this trivially on a single GPU.
+
+    num_iterations, eval_strategy/eval_steps, and save_strategy/save_steps/save_total_limit are
+    fixed per the Phase 5 design spec's paper-grounded config; see
+    docs/superpowers/specs/2026-07-05-phase-5-full-training-runs-design.md.
     """
     return GRPOConfig(
         output_dir=f"outputs/{condition}",
@@ -46,6 +50,12 @@ def build_config(
         logging_nan_inf_filter=False,
         log_completions=True,
         gradient_checkpointing=True,
+        num_iterations=2,
+        eval_strategy="steps",
+        eval_steps=20,
+        save_strategy="steps",
+        save_steps=50,
+        save_total_limit=3,
         report_to="trackio",
         project="turn-level-rewards",
         run_name=condition,
