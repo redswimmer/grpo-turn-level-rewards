@@ -65,6 +65,7 @@ def check() -> list[str]:
         "logging_steps": 1,
         "logging_nan_inf_filter": False,
         "log_completions": True,
+        "gradient_checkpointing": True,
         "project": "turn-level-rewards",
     }
     for config, label in [(outcome_config, "outcome_only"), (turn_config, "turn_level")]:

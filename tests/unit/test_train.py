@@ -33,6 +33,8 @@ def test_build_config_fixed_hyperparameters_identical_across_conditions():
     assert turn_config.logging_nan_inf_filter is False
     assert outcome_config.log_completions is True
     assert turn_config.log_completions is True
+    assert outcome_config.gradient_checkpointing is True
+    assert turn_config.gradient_checkpointing is True
     assert outcome_config.report_to == ["trackio"]
     assert turn_config.report_to == ["trackio"]
     assert outcome_config.project == "turn-level-rewards"

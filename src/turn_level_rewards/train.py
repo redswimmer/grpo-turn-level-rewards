@@ -45,6 +45,7 @@ def build_config(
         logging_steps=1,
         logging_nan_inf_filter=False,
         log_completions=True,
+        gradient_checkpointing=True,
         report_to="trackio",
         project="turn-level-rewards",
         run_name=condition,

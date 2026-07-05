@@ -61,7 +61,7 @@ class SearchEnv:
         """Search the wiki-18 corpus for passages relevant to a query.
 
         Args:
-            query (str): The search query text.
+            query: The search query text.
 
         Returns:
             str: The top retrieved passages formatted as numbered documents with title and
