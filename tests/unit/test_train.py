@@ -7,7 +7,8 @@ smoke test (not tests/unit/) covers instead, per CLAUDE.md's Guiding principles.
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from turn_level_rewards.train import Condition, TrackioAlertCallback, build_config
+import pytest
+from turn_level_rewards.train import Condition, TrackioAlertCallback, _parse_args, build_config
 
 
 def _build(condition: Condition, seed: int = 42, max_steps: int = 2, num_generations: int = 2):
@@ -125,3 +126,50 @@ def test_healthy_log_sequence_fires_no_alerts(mock_alert):
         _log(callback, step, loss=0.5, reward=0.8, frac_reward_zero_std=0.2)
 
     assert mock_alert.call_count == 0
+
+
+def test_parse_args_defaults():
+    args = _parse_args(["--condition", "outcome_only"])
+
+    assert args.condition == "outcome_only"
+    assert args.seed == 42
+    assert args.train_size == 8
+    assert args.eval_size == 8
+    assert args.max_steps == 2
+    assert args.num_generations == 2
+
+
+def test_parse_args_condition_required():
+    with pytest.raises(SystemExit):
+        _parse_args([])
+
+
+def test_parse_args_condition_choices_enforced():
+    with pytest.raises(SystemExit):
+        _parse_args(["--condition", "not_a_real_condition"])
+
+
+def test_parse_args_overrides():
+    args = _parse_args(
+        [
+            "--condition",
+            "turn_level",
+            "--seed",
+            "7",
+            "--train-size",
+            "90447",
+            "--eval-size",
+            "200",
+            "--max-steps",
+            "500",
+            "--num-generations",
+            "8",
+        ]
+    )
+
+    assert args.condition == "turn_level"
+    assert args.seed == 7
+    assert args.train_size == 90447
+    assert args.eval_size == 200
+    assert args.max_steps == 500
+    assert args.num_generations == 8

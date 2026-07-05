@@ -5,12 +5,17 @@ rationale (TRL tool-call-loop semantics, NaN-masking gotchas, measured max_compl
 and the generation_batch_size/num_generations divisibility constraint).
 """
 
+import argparse
 import math
 from typing import Literal
 
 import trackio
 from transformers import TrainerCallback
-from trl import GRPOConfig
+from trl import GRPOConfig, GRPOTrainer
+
+from turn_level_rewards import data
+from turn_level_rewards.env import SearchEnv
+from turn_level_rewards.rewards import get_reward_funcs
 
 Condition = Literal["outcome_only", "turn_level"]
 
@@ -117,3 +122,62 @@ class TrackioAlertCallback(TrainerCallback):
                     level=trackio.AlertLevel.WARN,
                 )
                 self._zero_std_alerted = True
+
+
+def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    """Parse train.py's CLI arguments.
+
+    The bare invocation (just --condition) IS Phase 4's smoke test -- see the design spec's
+    "CLI" section. Full-scale runs must explicitly override every size/step/generation flag.
+    """
+    parser = argparse.ArgumentParser(
+        description="Train GRPO with outcome-only or turn-level reward (see CLAUDE.md)."
+    )
+    parser.add_argument("--condition", required=True, choices=["outcome_only", "turn_level"])
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--train-size", type=int, default=8)
+    parser.add_argument("--eval-size", type=int, default=8)
+    parser.add_argument("--max-steps", type=int, default=2)
+    parser.add_argument("--num-generations", type=int, default=2)
+    return parser.parse_args(argv)
+
+
+def build_trainer(
+    condition: Condition,
+    train_size: int | None,
+    eval_size: int | None,
+    config: GRPOConfig,
+) -> GRPOTrainer:
+    """Composition root: real model, real SearchEnv (hits the live retrieval server), real data.
+
+    Not unit-tested -- this is exactly the integration surface the live smoke test validates.
+    """
+    return GRPOTrainer(
+        model="Qwen/Qwen3.5-0.8B",
+        reward_funcs=get_reward_funcs(condition),
+        args=config,
+        train_dataset=data.load_train_dataset(n=train_size, seed=config.seed),
+        eval_dataset=data.load_eval_dataset(n=eval_size, seed=config.seed),
+        # SearchEnv.reset requires `metadata`, which is stricter than TRL's `_SupportsReset`
+        # protocol (bare **kwargs). This is safe in practice: per CLAUDE.md's "TRL mechanics"
+        # section, TRL always calls reset() with the entire sampled dataset row as kwargs, and
+        # every row (both loaders in data.py) always includes a `metadata` column.
+        environment_factory=SearchEnv,  # ty: ignore[invalid-argument-type]
+        callbacks=[TrackioAlertCallback()],
+    )
+
+
+def main() -> None:
+    args = _parse_args()
+    config = build_config(
+        condition=args.condition,
+        seed=args.seed,
+        max_steps=args.max_steps,
+        num_generations=args.num_generations,
+    )
+    trainer = build_trainer(args.condition, args.train_size, args.eval_size, config)
+    trainer.train()
+
+
+if __name__ == "__main__":
+    main()
