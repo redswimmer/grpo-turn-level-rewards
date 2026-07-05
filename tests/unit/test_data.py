@@ -171,15 +171,21 @@ def test_load_train_dataset_n_none_returns_all_filtered_rows():
 def test_load_eval_dataset_wraps_answer_into_golden_answers_list():
     ds = load_eval_dataset(None, load_dataset_fn=_fake_loader(EVAL_ROWS))
 
-    assert [row["golden_answers"] for row in ds] == [["yes"], ["Paris"]]
+    assert sorted(row["golden_answers"][0] for row in ds) == ["Paris", "yes"]
 
 
 def test_load_eval_dataset_nests_supporting_facts_and_context_under_metadata():
     ds = load_eval_dataset(1, load_dataset_fn=_fake_loader(EVAL_ROWS))
     row = ds[0]
+    supporting_titles = row["metadata"]["supporting_facts"]["title"]
+    context_titles = row["metadata"]["context"]["title"]
 
-    assert row["metadata"]["supporting_facts"]["title"] == ["Scott Derrickson", "Ed Wood"]
-    assert row["metadata"]["context"]["title"] == ["Scott Derrickson", "Ed Wood"]
+    # Row order isn't guaranteed after shuffling, so check internal consistency
+    # (supporting_facts and context must agree) and that it's one of the two EVAL_ROWS
+    # fixtures declared above (["Scott Derrickson", "Ed Wood"] from EVAL_ROW, ["Paris"]
+    # from the second EVAL_ROWS entry).
+    assert supporting_titles == context_titles
+    assert supporting_titles in (["Scott Derrickson", "Ed Wood"], ["Paris"])
 
 
 def test_load_train_and_eval_datasets_have_identical_column_contract():

@@ -70,15 +70,15 @@ def load_train_dataset(
     """
     ds = load_dataset_fn("PeterJinGo/nq_hotpotqa_train", "default", split="train")
     ds = ds.filter(lambda row: row["data_source"] == "hotpotqa")
+    ds = ds.shuffle(seed=seed)
     if n is not None:
-        ds = ds.shuffle(seed=seed)
         ds = ds.select(range(n))
     return ds.map(_format_train_row, remove_columns=ds.column_names)
 
 
 def load_eval_dataset(
     n: int | None,
-    seed: int = 0,
+    seed: int = 42,
     *,
     load_dataset_fn: Callable[..., Dataset] = datasets.load_dataset,
 ) -> Dataset:
@@ -91,7 +91,7 @@ def load_eval_dataset(
             fake returning an in-memory Dataset.
     """
     ds = load_dataset_fn("hotpotqa/hotpot_qa", "distractor", split="validation")
+    ds = ds.shuffle(seed=seed)
     if n is not None:
-        ds = ds.shuffle(seed=seed)
         ds = ds.select(range(n))
     return ds.map(_format_eval_row, remove_columns=ds.column_names)
