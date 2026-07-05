@@ -28,10 +28,15 @@ def build_config(
 ) -> GRPOConfig:
     """Build the GRPOConfig for a training run.
 
-    per_device_train_batch_size is set equal to num_generations, not passed independently --
-    GRPOConfig requires generation_batch_size (which defaults to per_device_train_batch_size *
-    num_processes * steps_per_generation) to be evenly divisible by num_generations; setting
-    them equal satisfies this trivially on a single GPU.
+    per_device_train_batch_size and per_device_eval_batch_size are both set equal to
+    num_generations, not passed independently -- GRPOConfig requires the train-side
+    generation_batch_size (which defaults to per_device_train_batch_size * num_processes *
+    steps_per_generation) to be evenly divisible by num_generations, and separately -- only once
+    eval_strategy != "no" -- requires per_device_eval_batch_size * num_processes to be divisible
+    by num_generations too (grpo_config.py's __post_init__, confirmed by a real canary run at
+    num_generations=21 raising ValueError against the default per_device_eval_batch_size=8 before
+    this field was added). Setting both equal to num_generations satisfies both trivially on a
+    single GPU.
 
     num_iterations, eval_strategy/eval_steps, and save_strategy/save_steps/save_total_limit are
     fixed per the Phase 5 design spec's paper-grounded config; see
@@ -43,6 +48,7 @@ def build_config(
         max_steps=max_steps,
         num_generations=num_generations,
         per_device_train_batch_size=num_generations,
+        per_device_eval_batch_size=num_generations,
         max_tool_calling_iterations=4,
         beta=0.0,
         max_completion_length=2048,

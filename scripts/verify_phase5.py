@@ -62,6 +62,26 @@ def check() -> list[str]:
                     f"build_config({label!r}).{field} == {actual!r}, expected {expected!r}"
                 )
 
+    # Regression check for a real bug a live canary run surfaced: eval_strategy="steps" makes
+    # GRPOConfig validate per_device_eval_batch_size * num_processes against num_generations, in
+    # addition to the already-checked train-side generation_batch_size divisibility. num_generations
+    # values that don't divide the HF default per_device_eval_batch_size=8 (e.g. 21, Phase 5's
+    # real full-run value) must not raise here.
+    try:
+        real_scale_config = build_config(
+            condition="outcome_only", seed=42, max_steps=2, num_generations=21
+        )
+    except ValueError as e:
+        failures.append(
+            f"build_config(num_generations=21) raised {e!r} -- eval-side divisibility broken"
+        )
+    else:
+        if real_scale_config.per_device_eval_batch_size != 21:
+            failures.append(
+                "build_config(num_generations=21).per_device_eval_batch_size == "
+                f"{real_scale_config.per_device_eval_batch_size!r}, expected 21"
+            )
+
     return failures
 
 

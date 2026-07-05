@@ -68,6 +68,17 @@ def test_build_config_per_device_train_batch_size_matches_num_generations():
     assert config.generation_batch_size % config.num_generations == 0
 
 
+def test_build_config_per_device_eval_batch_size_matches_num_generations():
+    """Regression test: a real canary run at num_generations=21 raised ValueError from
+    GRPOConfig's eval-side divisibility check (per_device_eval_batch_size=8 default isn't
+    divisible by 21) once eval_strategy="steps" was enabled. This must hold at a num_generations
+    that does NOT evenly divide the default per_device_eval_batch_size of 8.
+    """
+    config = _build("outcome_only", num_generations=21)
+    assert config.per_device_eval_batch_size == 21
+    assert (config.per_device_eval_batch_size * 1) % config.num_generations == 0
+
+
 def test_build_config_periodic_eval_and_save_fields():
     outcome_config = _build("outcome_only")
     turn_config = _build("turn_level")
