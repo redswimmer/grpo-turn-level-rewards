@@ -19,25 +19,33 @@ reward functions are summed. This is *not* a single-turn vs. multi-turn comparis
 vs. dense reward on top of an identical multi-turn architecture and identical advantage
 estimation, which is exactly what the paper's own `GRPO-OR`/`GRPO-MR` ablation isolates.
 
-### Explicitly out of scope (and why)
+### Beyond the GRPO-OR/GRPO-MR comparison: PPO/MT-PPO (Phases 7-8, committed) and MT-GRPO (still out of scope)
 
-The paper proposes two further algorithms beyond `GRPO-OR`/`GRPO-MR`; neither is attempted here:
+The paper proposes two further algorithms beyond `GRPO-OR`/`GRPO-MR`. One of them is now part of
+this repo's real, committed roadmap — not a maybe:
 
-- **`MT-GRPO`** — the paper's actual turn-level credit-assignment contribution: a *separate*
-  advantage computed per turn via extra per-state rollouts (Eq. 5, Appendix D), instead of one
-  trajectory-wide advantage. Out of scope because TRL's `GRPOTrainer` has no supported hook to
-  override its built-in advantage computation with a custom per-turn one — doing this for real
-  means patching non-public trainer internals, not a documented extension point.
 - **`PPO` / `MT-PPO`** — the paper's actual best-performing, most-benchmarked method (all of
-  Table 2's real numbers are PPO/MT-PPO, not MT-GRPO). Out of scope because TRL's `PPOTrainer` is
-  experimental and has **no multi-turn tool-calling support at all** (no `environment_factory`
-  equivalent — confirmed directly against TRL's current docs). A real MT-PPO would mean
-  hand-building the multi-turn rollout loop, a critic/value head, and GAE with turn-boundary
-  reward placement (Eq. 9) essentially from scratch — a much larger lift than this pass's scope.
-
-Both are legitimate follow-on directions, not ruled out permanently — just not part of this
-comparison. If either is picked up later, it should get its own phase doc under `docs/` rather
-than being folded into the existing `outcome_only`/`turn_level` roadmap.
+  Table 2's real numbers are PPO/MT-PPO, not MT-GRPO). **This is Phases 7-8 of this repo's
+  roadmap, not out of scope.** Re-checked directly (not assumed stale): TRL's `PPOTrainer`
+  (`trl.experimental.ppo`) still has **no multi-turn tool-calling support**, confirmed fresh
+  against both the installed version and the current dev branch — recent TRL commits added
+  tool-calling to `GRPOTrainer`, `KTOTrainer`, and `RLOOTrainer`, but never `PPOTrainer`. So Phase
+  7 hand-builds the multi-turn rollout loop, a critic/value head, and GAE with turn-boundary
+  reward placement (Eq. 9) on top of `transformers.Trainer` directly — the two riskiest pieces of
+  that build (the critic architecture, and driving the tool-calling loop manually) were verified
+  working end-to-end before committing to this plan; see
+  `docs/superpowers/specs/2026-07-05-phase-7-mt-ppo-design.md`. Phase 7 reproduces the paper's
+  actual Table 2 methodology (deterministic rewards only); Phase 8 adds the paper's separate
+  LLM-as-judge exploration (Appendix C.2/C.3, `gpt-oss-120b` via an OpenAI-compatible Bedrock
+  endpoint) on top of a working Phase 7. See the Roadmap section below and
+  `docs/phase-7-mt-ppo.md`/`docs/phase-8-llm-judge.md`.
+- **`MT-GRPO`** — the paper's actual turn-level credit-assignment contribution for GRPO
+  specifically: a *separate* advantage computed per turn via extra per-state rollouts (Eq. 5,
+  Appendix D), instead of one trajectory-wide advantage. **Still out of scope, unrelated to the
+  PPO work above.** TRL's `GRPOTrainer` has no supported hook to override its built-in advantage
+  computation with a custom per-turn one — doing this for real means patching non-public trainer
+  internals, not a documented extension point. A legitimate follow-on direction, not ruled out
+  permanently — if picked up later, it should get its own phase doc under `docs/`.
 
 ## Why this design (retrieval backend choice)
 
@@ -187,9 +195,9 @@ vLLM for a first pass; vLLM colocate mode available later if generation throughp
 ## Reward design (the crux decision)
 
 **Terminology**: `outcome_only` below is the paper's `GRPO-OR`; `turn_level` is the paper's
-`GRPO-MR`. See the Goal section's "Explicitly out of scope" note for why this stops short of the
-paper's `MT-GRPO` (no per-turn advantage estimation — both conditions use one trajectory-level
-GRPO advantage).
+`GRPO-MR`. See the Goal section's "Beyond the GRPO-OR/GRPO-MR comparison" note for why this stops
+short of the paper's `MT-GRPO` (no per-turn advantage estimation — both conditions use one
+trajectory-level GRPO advantage).
 
 Shared outcome component (identical in both conditions):
 - `format_reward`: small ±0.1 nudge for a parseable final-answer tag.
@@ -200,9 +208,9 @@ Shared outcome component (identical in both conditions):
 oversight — parallel to the "at most 2 searches" deviation above. Fetched the paper's GRPO
 Appendix E directly: its outcome reward there is **pure binary exact-match** ("Awards 1.0 if the
 model's answer... exactly matches any accepted answer," 0.0 otherwise) — no partial credit. (A
-separate, richer LLM-as-judge scoring scheme exists in the paper, but only as an optional PPO
-supplement in Appendix C.2, using `gpt-oss-120b`; irrelevant here since `PPO`/`MT-PPO` are already
-out of scope per the Goal section above.)
+separate, richer LLM-as-judge scoring scheme exists in the paper too, using `gpt-oss-120b` — that's
+Phase 8's scope, built on top of Phase 7's PPO/MT-PPO work, not this GRPO comparison; see the Goal
+section above.)
 
 This repo uses F1+EM-bonus instead because GRPO's only learning signal is *within-group reward
 variance* (the group-relative advantage) — a pure binary EM reward means any group of rollouts
@@ -332,8 +340,10 @@ in one dashboard, rather than separate projects.
 
 ## Roadmap
 
-Design finalized (Option B). Implementation is split into 6 phases, each in its own doc under
-`docs/`, so a fresh agent with no memory of this conversation can pick up any single phase.
+Design finalized (Option B). Implementation is split into 8 phases, each in its own doc under
+`docs/`, so a fresh agent with no memory of this conversation can pick up any single phase. All 8
+are committed work, not optional stretch goals — Phases 7-8 (PPO/MT-PPO + LLM judge) are a second,
+real comparison alongside the GRPO-OR/GRPO-MR one Phases 1-6 build, not a maybe-someday item.
 **Read this file (CLAUDE.md) in full first, then the specific phase doc, then the previous
 phase's "Handoff notes" section** — that's the actual handoff mechanism between phases.
 
@@ -345,6 +355,8 @@ phase's "Handoff notes" section** — that's the actual handoff mechanism betwee
 | 4 | `train.py` + live smoke test | `docs/phase-4-training-smoke-test.md` | **Done** — `scripts/verify_phase4.py` passes; live smoke test succeeded for both conditions (real tool calls, real retrieved passages, `turn_reward` confirmed genuinely nonzero, zero trackio alerts); see phase doc's Handoff notes for three real bugs the smoke test caught (a `GRPOConfig` divisibility constraint, two missing runtime dependencies, a docstring-format bug in Phase 2's `env.py`) and a CUDA OOM fixed with `gradient_checkpointing=True` |
 | 5 | Full training runs (both conditions) | `docs/phase-5-full-training-runs.md` | Not started |
 | 6 | `evaluate.py` + `compare_runs.py` + write-up | `docs/phase-6-evaluation-comparison.md` | Not started |
+| 7 | Multi-turn PPO / MT-PPO (custom trainer, deterministic rewards) | `docs/phase-7-mt-ppo.md` | Not started — design complete, see `docs/superpowers/specs/2026-07-05-phase-7-mt-ppo-design.md` |
+| 8 | LLM-as-judge reward (Bedrock + gpt-oss), on top of Phase 7 | `docs/phase-8-llm-judge.md` | Not started |
 
 Each phase doc is self-contained: goal, prerequisites (= previous phase's exit criteria), a task
 checklist, exit criteria, and a **Handoff notes** section the executing agent fills in before
