@@ -76,10 +76,10 @@ class TrackioAlertCallback(TrainerCallback):
             return
 
         loss = logs.get("loss")
-        if loss is not None and math.isnan(loss):
+        if loss is not None and not math.isfinite(loss):
             trackio.alert(
-                title="NaN loss",
-                text=f"Loss is NaN at step {state.global_step} -- stopping training.",
+                title="Non-finite loss",
+                text=f"Loss is {loss} at step {state.global_step} -- stopping training.",
                 level=trackio.AlertLevel.ERROR,
             )
             control.should_training_stop = True

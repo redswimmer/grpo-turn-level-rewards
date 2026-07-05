@@ -115,7 +115,22 @@ def test_nan_loss_fires_immediately_and_stops_training(mock_alert):
     control = _log(callback, 5, loss=float("nan"), reward=0.5, frac_reward_zero_std=0.5)
 
     assert mock_alert.call_count == 1
-    assert mock_alert.call_args.kwargs["title"] == "NaN loss"
+    assert mock_alert.call_args.kwargs["title"] == "Non-finite loss"
+    assert control.should_training_stop is True
+
+
+@patch("turn_level_rewards.train.trackio.alert")
+def test_inf_loss_fires_immediately_and_stops_training(mock_alert):
+    callback = TrackioAlertCallback()
+    control = _log(callback, 5, loss=float("inf"), reward=0.5, frac_reward_zero_std=0.5)
+
+    assert mock_alert.call_count == 1
+    assert mock_alert.call_args.kwargs["title"] == "Non-finite loss"
+    assert control.should_training_stop is True
+
+    control = _log(
+        TrackioAlertCallback(), 5, loss=float("-inf"), reward=0.5, frac_reward_zero_std=0.5
+    )
     assert control.should_training_stop is True
 
 
