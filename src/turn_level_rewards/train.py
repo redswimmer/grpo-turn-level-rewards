@@ -7,6 +7,7 @@ and the generation_batch_size/num_generations divisibility constraint).
 
 import argparse
 import math
+from datetime import datetime
 from typing import Literal
 
 import trackio
@@ -223,6 +224,15 @@ def main() -> None:
         seed=args.seed,
         max_steps=args.max_steps,
         num_generations=args.num_generations,
+    )
+    # run_name defaults to the bare condition in build_config (kept there so its unit tests stay
+    # simple), but every real invocation -- smoke test, canary, or full run -- must get a unique,
+    # self-describing name here at the composition root. Without this, repeated invocations of the
+    # same --condition silently share one trackio run record: a real full run at num_generations=21
+    # found its own reward/exact_match/f1 curve interleaved with every earlier debug invocation's
+    # data under the same run name, with no way to cleanly separate them after the fact.
+    config.run_name = (
+        f"{args.condition}-{args.max_steps}steps-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
     )
     trainer = build_trainer(args.condition, args.train_size, args.eval_size, config)
     trainer.train()
