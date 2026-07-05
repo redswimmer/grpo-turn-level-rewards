@@ -65,11 +65,16 @@ def check() -> list[str]:
                     f"build_config({label!r}).{field} == {actual!r}, expected {expected!r}"
                 )
 
-    # Regression check for a real bug a live canary run surfaced at num_generations=21 (Phase 5's
-    # real full-run value): per_device_train_batch_size equal to num_generations (no chunking)
-    # OOMed a 24GB GPU inside TRL's per-token-logps forward pass. Fixed by capping
+    # Regression check for two real bugs live runs surfaced at num_generations=21 (Phase 5's real
+    # full-run value): (1) per_device_train_batch_size equal to num_generations (no chunking) OOMed
+    # a 24GB GPU inside TRL's per-token-logps forward pass -- fixed by capping
     # per_device_train_batch_size at 1 (fully sequential chunks -- 3 still OOMed on the backward
-    # pass), with steps_per_generation making up the difference.
+    # pass); (2) making up the difference via steps_per_generation directly (leaving
+    # gradient_accumulation_steps at its default of 1) caused a real 6300-step run to collapse into
+    # a fixed, zero-variance reward within ~300 steps, since each micro-batch then triggered its own
+    # independent optimizer step instead of being accumulated into one properly-averaged update per
+    # rollout group -- fixed by setting gradient_accumulation_steps instead (steps_per_generation
+    # then defaults to match it).
     try:
         real_scale_config = build_config(
             condition="outcome_only", seed=42, max_steps=2, num_generations=21
@@ -79,6 +84,7 @@ def check() -> list[str]:
     else:
         real_scale_checks = {
             "per_device_train_batch_size": 1,
+            "gradient_accumulation_steps": 21,
             "steps_per_generation": 21,
             "generation_batch_size": 21,
         }

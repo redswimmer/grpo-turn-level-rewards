@@ -84,16 +84,23 @@ def test_train_micro_batch_size_defaults_to_the_module_cap_of_one():
     assert _train_micro_batch_size(21) == 1
 
 
-def test_build_config_train_batch_size_is_capped_micro_batch_with_matching_steps_per_generation():
-    """Regression test: a real canary run at num_generations=21 with per_device_train_batch_size
+def test_build_config_train_batch_size_is_capped_micro_batch_with_matching_grad_accumulation():
+    """Regression test #1: a real canary run at num_generations=21 with per_device_train_batch_size
     equal to num_generations (no chunking) tried to allocate 28.29 GiB in a single logits-to-fp32
-    conversion and OOMed a 24GB GPU. per_device_train_batch_size must stay capped, with
-    steps_per_generation making up the difference so the full rollout group size (generation_batch_size)
-    still equals num_generations exactly.
+    conversion and OOMed a 24GB GPU. per_device_train_batch_size must stay capped.
+
+    Regression test #2: a real 6300-step run collapsed into a fixed, zero-variance reward within
+    ~300 steps because the difference was made up via steps_per_generation directly (leaving
+    gradient_accumulation_steps at its default of 1) -- each memory-safe micro-batch triggered its
+    own independent optimizer step instead of being combined into one properly-averaged update per
+    rollout group. gradient_accumulation_steps must make up the difference instead (steps_per_generation
+    then defaults to match it, per TRL's own documented behavior), so the full rollout group size
+    (generation_batch_size) still equals num_generations exactly, via real accumulation.
     """
     config = _build("outcome_only", num_generations=21)
 
     assert config.per_device_train_batch_size == 1
+    assert config.gradient_accumulation_steps == 21
     assert config.steps_per_generation == 21
     assert config.generation_batch_size == 21
     assert config.generation_batch_size % config.num_generations == 0

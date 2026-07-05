@@ -34,10 +34,11 @@ _MAX_TRAIN_MICRO_BATCH_SIZE = 1
 def _train_micro_batch_size(num_generations: int, cap: int = _MAX_TRAIN_MICRO_BATCH_SIZE) -> int:
     """Largest divisor of num_generations that is <= cap.
 
-    Must stay an exact divisor: GRPOConfig's steps_per_generation mechanism reconstructs the full
-    num_generations-sized rollout group from `per_device_train_batch_size * steps_per_generation`,
-    so generation_batch_size still equals num_generations exactly (one full rollout group per
-    step, unchanged) -- only the per-token-logps forward pass gets chunked smaller.
+    Must stay an exact divisor: GRPOConfig reconstructs the full num_generations-sized rollout
+    group from `per_device_train_batch_size * gradient_accumulation_steps`, so
+    generation_batch_size still equals num_generations exactly (one full rollout group per
+    optimizer step, unchanged) -- only the per-token-logps forward/backward pass gets chunked
+    smaller, with gradient accumulation combining the chunks back into one real update.
     """
     for candidate in range(min(cap, num_generations), 0, -1):
         if num_generations % candidate == 0:
@@ -54,9 +55,19 @@ def build_config(
     """Build the GRPOConfig for a training run.
 
     per_device_train_batch_size is capped at _MAX_TRAIN_MICRO_BATCH_SIZE (see its docstring) to
-    avoid OOMing the per-token-logps forward pass at large num_generations; steps_per_generation
+    avoid OOMing the per-token-logps forward pass at large num_generations; gradient_accumulation_steps
     makes up the difference so generation_batch_size still equals num_generations exactly (one
-    full rollout group per step).
+    full rollout group per optimizer step) -- **not** steps_per_generation directly. A real
+    6300-step run collapsed into a fixed, zero-variance -0.1 reward within ~300 steps: TRL's own
+    docstring says steps_per_generation "defaults to gradient_accumulation_steps" when unset,
+    meaning the intended lever IS gradient_accumulation_steps -- setting steps_per_generation
+    directly while leaving gradient_accumulation_steps at its default of 1 made each of the
+    memory-safe micro-batches trigger its own independent optimizer step (no accumulation) instead
+    of being combined into one properly-averaged update per rollout group, i.e. 21 (x2 for
+    num_iterations) noisy single-sequence gradient steps instead of 1-2 stable ones per group.
+    Fixed by setting gradient_accumulation_steps instead and leaving steps_per_generation unset so
+    it defaults to match (confirmed by direct construction: same generation_batch_size==21 result,
+    but now with real accumulation).
 
     Periodic in-training eval (eval_strategy="steps") is deliberately NOT enabled here, despite
     being part of Phase 5's original design: GRPOTrainer's `environments` pool (required by
@@ -83,7 +94,7 @@ def build_config(
         max_steps=max_steps,
         num_generations=num_generations,
         per_device_train_batch_size=train_micro_batch_size,
-        steps_per_generation=num_generations // train_micro_batch_size,
+        gradient_accumulation_steps=num_generations // train_micro_batch_size,
         max_tool_calling_iterations=4,
         beta=0.0,
         max_completion_length=2048,
