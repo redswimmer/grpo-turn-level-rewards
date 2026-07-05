@@ -48,11 +48,14 @@ def check() -> list[str]:
 
     fixed_checks = {
         "num_iterations": 2,
-        "eval_strategy": "steps",
-        "eval_steps": 20,
         "save_strategy": "steps",
         "save_steps": 50,
         "save_total_limit": 3,
+        # Periodic in-training eval is deliberately disabled -- see build_config's docstring for
+        # the environments-pool incompatibility with SearchEnv this ran into on a real canary run,
+        # and the upstream TRL PR (#6001) that fixes it. This guards against silently re-enabling
+        # it without also revisiting the trl pin.
+        "eval_strategy": "no",
     }
     for config, label in [(outcome_config, "outcome_only"), (turn_config, "turn_level")]:
         for field, expected in fixed_checks.items():
@@ -62,25 +65,29 @@ def check() -> list[str]:
                     f"build_config({label!r}).{field} == {actual!r}, expected {expected!r}"
                 )
 
-    # Regression check for a real bug a live canary run surfaced: eval_strategy="steps" makes
-    # GRPOConfig validate per_device_eval_batch_size * num_processes against num_generations, in
-    # addition to the already-checked train-side generation_batch_size divisibility. num_generations
-    # values that don't divide the HF default per_device_eval_batch_size=8 (e.g. 21, Phase 5's
-    # real full-run value) must not raise here.
+    # Regression check for a real bug a live canary run surfaced at num_generations=21 (Phase 5's
+    # real full-run value): per_device_train_batch_size equal to num_generations (no chunking)
+    # OOMed a 24GB GPU inside TRL's per-token-logps forward pass. Fixed by capping
+    # per_device_train_batch_size at 1 (fully sequential chunks -- 3 still OOMed on the backward
+    # pass), with steps_per_generation making up the difference.
     try:
         real_scale_config = build_config(
             condition="outcome_only", seed=42, max_steps=2, num_generations=21
         )
     except ValueError as e:
-        failures.append(
-            f"build_config(num_generations=21) raised {e!r} -- eval-side divisibility broken"
-        )
+        failures.append(f"build_config(num_generations=21) raised {e!r} -- batching broken")
     else:
-        if real_scale_config.per_device_eval_batch_size != 21:
-            failures.append(
-                "build_config(num_generations=21).per_device_eval_batch_size == "
-                f"{real_scale_config.per_device_eval_batch_size!r}, expected 21"
-            )
+        real_scale_checks = {
+            "per_device_train_batch_size": 1,
+            "steps_per_generation": 21,
+            "generation_batch_size": 21,
+        }
+        for field, expected in real_scale_checks.items():
+            actual = getattr(real_scale_config, field)
+            if actual != expected:
+                failures.append(
+                    f"build_config(num_generations=21).{field} == {actual!r}, expected {expected!r}"
+                )
 
     return failures
 

@@ -191,6 +191,24 @@ vLLM for a first pass; vLLM colocate mode available later if generation throughp
 - Multiple `reward_funcs` are summed (or weighted via `reward_weights`); returning `None` from a
   reward function lets it abstain per-example (not needed here — no task-mixing).
 - `environment_factory` requires `transformers>=5.2.0`.
+- **Periodic in-training eval (`GRPOConfig(eval_strategy="steps")`) is incompatible with
+  `environment_factory` at large `num_generations`, in the installed `trl==1.7.1`.** Confirmed by
+  a real canary run: `GRPOTrainer`'s `environments` pool (required by `SearchEnv`) is built once at
+  init, sized to train's `generation_batch_size`, and reused unconditionally for both train and
+  eval (`grpo_trainer.py:544-545`, `1982`) — the moment eval ran with a smaller per-step batch than
+  train's, this raised `ValueError: zip() argument 2 is longer than argument 1`. Matching eval's
+  batch size to train's instead reproduces the exact per-token-logps OOM documented in
+  `docs/superpowers/specs/2026-07-05-phase-5-full-training-runs-design.md`, with no eval-side
+  chunking knob available to work around it. **Already fixed upstream**, not yet released: TRL's
+  `main` branch (commit `8b61980d`, "Support multiple environments [1/2]: Pool and build
+  environment tool dicts at batch time", PR #6001, merged 2026-07-01) rebuilds the `environments`
+  list at batch time, sized to `len(inputs)` for whichever batch (train or eval) is currently
+  running — confirmed NOT an ancestor of the `v1.7.1` tag (`git merge-base --is-ancestor 8b61980d
+  v1.7.1` → false) or any later PyPI release as of this writing. **Revisit if the live eval-reward
+  curve is wanted later**: pin `trl` to a commit including `8b61980d` (accepting the stability
+  tradeoff of an unreleased, unversioned dev build) and re-enable `eval_strategy="steps"` in
+  `train.py`'s `build_config`. Until then, Phase 5 does not enable periodic eval — Phase 6's
+  `evaluate.py` (one full post-hoc run over the entire held-out set) is the only held-out signal.
 
 ## Reward design (the crux decision)
 

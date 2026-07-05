@@ -8,7 +8,13 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
-from turn_level_rewards.train import Condition, TrackioAlertCallback, _parse_args, build_config
+from turn_level_rewards.train import (
+    Condition,
+    TrackioAlertCallback,
+    _parse_args,
+    _train_micro_batch_size,
+    build_config,
+)
 
 
 def _build(condition: Condition, seed: int = 42, max_steps: int = 2, num_generations: int = 2):
@@ -62,31 +68,53 @@ def test_build_config_only_condition_derived_fields_differ():
     assert differing_fields == {"output_dir", "run_name"}
 
 
-def test_build_config_per_device_train_batch_size_matches_num_generations():
-    config = _build("outcome_only", num_generations=8)
-    assert config.per_device_train_batch_size == 8
+def test_train_micro_batch_size_returns_largest_divisor_within_an_explicit_cap():
+    assert _train_micro_batch_size(21, cap=3) == 3  # divides evenly
+    assert _train_micro_batch_size(8, cap=3) == 2  # 3 doesn't divide 8; falls back a divisor
+    assert _train_micro_batch_size(7, cap=3) == 1  # prime > cap; worst-case single-sequence chunks
+
+
+def test_train_micro_batch_size_defaults_to_the_module_cap_of_one():
+    """The real, currently-effective cap: 3 still OOMed on a real canary run's backward pass (a
+    much smaller shortfall than the original unchunked-at-21 crash, confirmed not a fragmentation
+    artifact), so 1 -- fully sequential, single-sequence chunks -- is what build_config actually
+    uses today.
+    """
+    assert _train_micro_batch_size(2) == 1
+    assert _train_micro_batch_size(21) == 1
+
+
+def test_build_config_train_batch_size_is_capped_micro_batch_with_matching_steps_per_generation():
+    """Regression test: a real canary run at num_generations=21 with per_device_train_batch_size
+    equal to num_generations (no chunking) tried to allocate 28.29 GiB in a single logits-to-fp32
+    conversion and OOMed a 24GB GPU. per_device_train_batch_size must stay capped, with
+    steps_per_generation making up the difference so the full rollout group size (generation_batch_size)
+    still equals num_generations exactly.
+    """
+    config = _build("outcome_only", num_generations=21)
+
+    assert config.per_device_train_batch_size == 1
+    assert config.steps_per_generation == 21
+    assert config.generation_batch_size == 21
     assert config.generation_batch_size % config.num_generations == 0
 
 
-def test_build_config_per_device_eval_batch_size_matches_num_generations():
-    """Regression test: a real canary run at num_generations=21 raised ValueError from
-    GRPOConfig's eval-side divisibility check (per_device_eval_batch_size=8 default isn't
-    divisible by 21) once eval_strategy="steps" was enabled. This must hold at a num_generations
-    that does NOT evenly divide the default per_device_eval_batch_size of 8.
+def test_build_config_periodic_eval_stays_disabled():
+    """Periodic in-training eval is deliberately NOT enabled (see build_config's docstring for the
+    environments-pool incompatibility this ran into, and the upstream TRL PR that fixes it). This
+    guards against silently re-enabling it without also revisiting the trl pin.
     """
-    config = _build("outcome_only", num_generations=21)
-    assert config.per_device_eval_batch_size == 21
-    assert (config.per_device_eval_batch_size * 1) % config.num_generations == 0
+    config = _build("outcome_only")
+
+    assert config.eval_strategy == "no"
 
 
-def test_build_config_periodic_eval_and_save_fields():
+def test_build_config_num_iterations_and_save_fields():
     outcome_config = _build("outcome_only")
     turn_config = _build("turn_level")
 
     for config in (outcome_config, turn_config):
         assert config.num_iterations == 2
-        assert config.eval_strategy == "steps"
-        assert config.eval_steps == 20
         assert config.save_strategy == "steps"
         assert config.save_steps == 50
         assert config.save_total_limit == 3

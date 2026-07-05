@@ -19,6 +19,30 @@ from turn_level_rewards.rewards import get_reward_funcs
 
 Condition = Literal["outcome_only", "turn_level"]
 
+# TRL's _get_per_token_logps_and_entropies chunks its forward pass using per_device_train_batch_size
+# as the literal chunk size (grpo_trainer.py:2089) -- a real canary run at num_generations=21 with
+# per_device_train_batch_size=21 (no chunking) tried to allocate 28.29 GiB for one logits-to-fp32
+# conversion and OOMed a 24GB GPU. A chunk size of 3 still OOMed on the next backward pass (a
+# smaller, ~1-4 GiB shortfall each retry, confirmed not a fragmentation artifact --
+# PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True made no difference). 1 (fully sequential,
+# single-sequence chunks) was the next divisor down and is the smallest possible footprint;
+# confirmed by re-running the same canary successfully (all 3 steps) after this fix.
+_MAX_TRAIN_MICRO_BATCH_SIZE = 1
+
+
+def _train_micro_batch_size(num_generations: int, cap: int = _MAX_TRAIN_MICRO_BATCH_SIZE) -> int:
+    """Largest divisor of num_generations that is <= cap.
+
+    Must stay an exact divisor: GRPOConfig's steps_per_generation mechanism reconstructs the full
+    num_generations-sized rollout group from `per_device_train_batch_size * steps_per_generation`,
+    so generation_batch_size still equals num_generations exactly (one full rollout group per
+    step, unchanged) -- only the per-token-logps forward pass gets chunked smaller.
+    """
+    for candidate in range(min(cap, num_generations), 0, -1):
+        if num_generations % candidate == 0:
+            return candidate
+    return 1  # unreachable: 1 always divides evenly
+
 
 def build_config(
     condition: Condition,
@@ -28,27 +52,37 @@ def build_config(
 ) -> GRPOConfig:
     """Build the GRPOConfig for a training run.
 
-    per_device_train_batch_size and per_device_eval_batch_size are both set equal to
-    num_generations, not passed independently -- GRPOConfig requires the train-side
-    generation_batch_size (which defaults to per_device_train_batch_size * num_processes *
-    steps_per_generation) to be evenly divisible by num_generations, and separately -- only once
-    eval_strategy != "no" -- requires per_device_eval_batch_size * num_processes to be divisible
-    by num_generations too (grpo_config.py's __post_init__, confirmed by a real canary run at
-    num_generations=21 raising ValueError against the default per_device_eval_batch_size=8 before
-    this field was added). Setting both equal to num_generations satisfies both trivially on a
-    single GPU.
+    per_device_train_batch_size is capped at _MAX_TRAIN_MICRO_BATCH_SIZE (see its docstring) to
+    avoid OOMing the per-token-logps forward pass at large num_generations; steps_per_generation
+    makes up the difference so generation_batch_size still equals num_generations exactly (one
+    full rollout group per step).
 
-    num_iterations, eval_strategy/eval_steps, and save_strategy/save_steps/save_total_limit are
-    fixed per the Phase 5 design spec's paper-grounded config; see
-    docs/superpowers/specs/2026-07-05-phase-5-full-training-runs-design.md.
+    Periodic in-training eval (eval_strategy="steps") is deliberately NOT enabled here, despite
+    being part of Phase 5's original design: GRPOTrainer's `environments` pool (required by
+    SearchEnv) is built once at init, sized to train's generation_batch_size, and reused
+    unconditionally for both train and eval (installed trl==1.7.1's grpo_trainer.py:544-545,
+    1982) -- confirmed by a real canary run raising `ValueError: zip() argument 2 is longer than
+    argument 1` the moment eval ran with a smaller per-step batch than train's. Matching eval's
+    batch to train's (21) instead reproduces the exact OOM this function's micro-batching already
+    fixes, with no eval-side chunking knob to work around it. This is fixed upstream in TRL's
+    `main` branch (commit 8b61980d, "Support multiple environments [1/2]: Pool and build
+    environment tool dicts at batch time", PR #6001, merged 2026-07-01) via batch-time environment
+    pooling -- confirmed NOT in the 1.7.1 PyPI release (`git merge-base --is-ancestor 8b61980d
+    v1.7.1` returns false) or any later release as of this writing. Revisit enabling periodic eval
+    by pinning trl to a commit that includes 8b61980d if the live eval curve is wanted later;
+    until then, Phase 6's evaluate.py (a full post-hoc run over the entire held-out set) is the
+    only held-out signal. See docs/superpowers/specs/2026-07-05-phase-5-full-training-runs-design.md
+    for the rest of this phase's paper-grounded config (num_iterations,
+    save_strategy/save_steps/save_total_limit).
     """
+    train_micro_batch_size = _train_micro_batch_size(num_generations)
     return GRPOConfig(
         output_dir=f"outputs/{condition}",
         seed=seed,
         max_steps=max_steps,
         num_generations=num_generations,
-        per_device_train_batch_size=num_generations,
-        per_device_eval_batch_size=num_generations,
+        per_device_train_batch_size=train_micro_batch_size,
+        steps_per_generation=num_generations // train_micro_batch_size,
         max_tool_calling_iterations=4,
         beta=0.0,
         max_completion_length=2048,
@@ -57,8 +91,6 @@ def build_config(
         log_completions=True,
         gradient_checkpointing=True,
         num_iterations=2,
-        eval_strategy="steps",
-        eval_steps=20,
         save_strategy="steps",
         save_steps=50,
         save_total_limit=3,
