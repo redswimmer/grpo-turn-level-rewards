@@ -292,7 +292,7 @@ phase's "Handoff notes" section** — that's the actual handoff mechanism betwee
 | # | Phase | Doc | Status |
 |---|---|---|---|
 | 1 | Retrieval infra: JDK, wiki-18 download, retrieval server | `docs/phase-1-retrieval-infra.md` | **Done** — server running, `verify_retrieval.py` passes; see phase doc's Handoff notes for the launch command, a `retrieval_server.py` bug fix, and a correction to this file's "confirmed present" title examples |
-| 2 | Core library: `env.py`, `rewards.py`, `metrics.py` + `tests/unit/` | `docs/phase-2-core-library.md` | **Done** (on `phase-2-core-library` branch, not yet merged) — `scripts/verify_phase2.py` passes; see phase doc's Handoff notes for the confirmed `reset()` contract and a flagged Phase 3/4 gap (dataset's `prompt` column needs replacing) |
+| 2 | Core library: `env.py`, `rewards.py`, `metrics.py` + `tests/unit/` | `docs/phase-2-core-library.md` | **Done** — merged to `main` via PR #2; `scripts/verify_phase2.py` passes; see phase doc's Handoff notes for the confirmed `reset()` contract and a flagged Phase 3/4 gap (dataset's `prompt` column needs replacing) |
 | 3 | Data pipeline: `data.py` | `docs/phase-3-data-pipeline.md` | Not started |
 | 4 | `train.py` + live smoke test | `docs/phase-4-training-smoke-test.md` | Not started |
 | 5 | Full training runs (both conditions) | `docs/phase-5-full-training-runs.md` | Not started |
