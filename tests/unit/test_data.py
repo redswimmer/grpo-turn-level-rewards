@@ -1,4 +1,10 @@
-from turn_level_rewards.data import _format_eval_row, _format_train_row
+import datasets
+from turn_level_rewards.data import (
+    _format_eval_row,
+    _format_train_row,
+    load_eval_dataset,
+    load_train_dataset,
+)
 
 TRAIN_ROW = {
     "id": "train_0",
@@ -88,3 +94,97 @@ def test_train_and_eval_rows_have_identical_column_contract():
 
     assert set(train_row.keys()) == set(eval_row.keys())
     assert set(train_row["metadata"].keys()) == set(eval_row["metadata"].keys())
+
+
+TRAIN_ROWS = [
+    TRAIN_ROW,
+    {
+        "id": "train_1",
+        "question": "What year was 127 Hours released?",
+        "golden_answers": ["2010"],
+        "data_source": "hotpotqa",
+        "prompt": [{"role": "user", "content": "old text-tag prompt, discarded"}],
+        "ability": "fact-reasoning",
+        "metadata": {
+            "type": "bridge",
+            "level": "easy",
+            "supporting_facts": {"title": ["127 Hours"], "sent_id": [0]},
+            "context": {"title": ["127 Hours"], "sentences": [["A 2010 survival drama film."]]},
+        },
+    },
+    {
+        "id": "train_2",
+        "question": "A natural-questions-sourced row that must be filtered out.",
+        "golden_answers": ["irrelevant"],
+        "data_source": "nq",
+        "prompt": [{"role": "user", "content": "old text-tag prompt, discarded"}],
+        "ability": "fact-reasoning",
+        "metadata": {
+            "type": "single",
+            "level": "easy",
+            "supporting_facts": {"title": [], "sent_id": []},
+            "context": {"title": [], "sentences": []},
+        },
+    },
+]
+
+EVAL_ROWS = [
+    EVAL_ROW,
+    {
+        "id": "5a90620b",
+        "question": "What is the capital of France?",
+        "answer": "Paris",
+        "type": "bridge",
+        "level": "easy",
+        "supporting_facts": {"title": ["Paris"], "sent_id": [0]},
+        "context": {"title": ["Paris"], "sentences": [["Paris is the capital of France."]]},
+    },
+]
+
+
+def _fake_loader(rows):
+    def load_dataset_fn(*args, **kwargs):
+        return datasets.Dataset.from_list(rows)
+
+    return load_dataset_fn
+
+
+def test_load_train_dataset_filters_to_hotpotqa_only():
+    ds = load_train_dataset(None, load_dataset_fn=_fake_loader(TRAIN_ROWS))
+
+    assert len(ds) == 2
+    assert all(row["question"] != TRAIN_ROWS[2]["question"] for row in ds)
+
+
+def test_load_train_dataset_n_selects_exactly_n_rows():
+    ds = load_train_dataset(1, seed=0, load_dataset_fn=_fake_loader(TRAIN_ROWS))
+
+    assert len(ds) == 1
+
+
+def test_load_train_dataset_n_none_returns_all_filtered_rows():
+    ds = load_train_dataset(None, load_dataset_fn=_fake_loader(TRAIN_ROWS))
+
+    assert len(ds) == 2
+
+
+def test_load_eval_dataset_wraps_answer_into_golden_answers_list():
+    ds = load_eval_dataset(None, load_dataset_fn=_fake_loader(EVAL_ROWS))
+
+    assert [row["golden_answers"] for row in ds] == [["yes"], ["Paris"]]
+
+
+def test_load_eval_dataset_nests_supporting_facts_and_context_under_metadata():
+    ds = load_eval_dataset(1, load_dataset_fn=_fake_loader(EVAL_ROWS))
+    row = ds[0]
+
+    assert row["metadata"]["supporting_facts"]["title"] == ["Scott Derrickson", "Ed Wood"]
+    assert row["metadata"]["context"]["title"] == ["Scott Derrickson", "Ed Wood"]
+
+
+def test_load_train_and_eval_datasets_have_identical_column_contract():
+    train_ds = load_train_dataset(1, load_dataset_fn=_fake_loader(TRAIN_ROWS))
+    eval_ds = load_eval_dataset(1, load_dataset_fn=_fake_loader(EVAL_ROWS))
+
+    assert set(train_ds.column_names) == set(eval_ds.column_names)
+    assert set(train_ds[0]["metadata"].keys()) == set(eval_ds[0]["metadata"].keys())

@@ -4,6 +4,11 @@ env.py/rewards.py never need to know which source dataset a row came from -- bot
 produce identical prompt/question/golden_answers/metadata columns.
 """
 
+from collections.abc import Callable
+
+import datasets
+from datasets import Dataset
+
 _SYSTEM_PROMPT = (
     "You are a research assistant that answers questions by searching Wikipedia when needed.\n\n"
     "You have access to a `search` tool that looks up Wikipedia passages for a query. Reason "
@@ -47,3 +52,46 @@ def _format_eval_row(row: dict) -> dict:
         "context": row["context"],
     }
     return _row_with_prompt(row["question"], [row["answer"]], metadata)
+
+
+def load_train_dataset(
+    n: int | None,
+    seed: int = 42,
+    *,
+    load_dataset_fn: Callable[..., Dataset] = datasets.load_dataset,
+) -> Dataset:
+    """Load PeterJinGo/nq_hotpotqa_train, filtered to hotpotqa rows, reshaped to the shared contract.
+
+    Args:
+        n: Number of rows to select after shuffling, or None for all filtered rows.
+        seed: Shuffle seed.
+        load_dataset_fn: Injectable seam for the real datasets.load_dataset call -- tests pass a
+            fake returning an in-memory Dataset.
+    """
+    ds = load_dataset_fn("PeterJinGo/nq_hotpotqa_train", "default", split="train")
+    ds = ds.filter(lambda row: row["data_source"] == "hotpotqa")
+    if n is not None:
+        ds = ds.shuffle(seed=seed)
+        ds = ds.select(range(n))
+    return ds.map(_format_train_row, remove_columns=ds.column_names)
+
+
+def load_eval_dataset(
+    n: int | None,
+    seed: int = 0,
+    *,
+    load_dataset_fn: Callable[..., Dataset] = datasets.load_dataset,
+) -> Dataset:
+    """Load hotpotqa/hotpot_qa (distractor, validation), reshaped to the shared contract.
+
+    Args:
+        n: Number of rows to select after shuffling, or None for all rows.
+        seed: Shuffle seed.
+        load_dataset_fn: Injectable seam for the real datasets.load_dataset call -- tests pass a
+            fake returning an in-memory Dataset.
+    """
+    ds = load_dataset_fn("hotpotqa/hotpot_qa", "distractor", split="validation")
+    if n is not None:
+        ds = ds.shuffle(seed=seed)
+        ds = ds.select(range(n))
+    return ds.map(_format_eval_row, remove_columns=ds.column_names)
