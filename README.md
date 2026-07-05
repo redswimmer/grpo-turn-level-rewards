@@ -1,29 +1,36 @@
-# Outcome-Only vs. Merged-Reward GRPO
+# Outcome vs. Turn-Level Reward for Multi-Turn Search Agents
 
 A small-scale experiment testing whether rewarding an AI agent's intermediate actions — not just
 its final answer — helps it learn faster and more reliably.
 
 ## What this compares
 
-This repo tests that question with GRPO, on a multi-turn Wikipedia-search agent, by training two
-otherwise-identical models that differ only in reward shaping.
+This repo trains a multi-turn Wikipedia-search agent under two reward regimes:
 
-Concretely, it's a simplified reproduction of one ablation from ["Reinforcing Multi-Turn
+- **Outcome reward** — the agent is scored only on its final answer's correctness. Sparse: no
+  signal until the very end of the episode.
+- **Turn-level reward** — the same outcome scoring, plus a bonus for surfacing a real
+  supporting-fact passage during search. Denser: the agent gets credit for good intermediate
+  behavior, not just a good final answer.
+
+The interesting question isn't just "does the denser signal help" — it's **whether that holds up
+across genuinely different reinforcement learning algorithms**, not just one. So this repo tests
+the same outcome-vs-turn-level comparison twice:
+
+- **GRPO** — scores a group of the agent's attempts at the same question against each other,
+  using the ones that did relatively better within the group as the learning signal.
+- **PPO** — learns a running estimate of how good a position is (a value function), and nudges
+  the policy toward actions that beat that estimate, turn by turn.
+
+If turn-level reward helps in the same way under both, that's a real finding about reward shaping
+in multi-turn agent RL, not an artifact of one algorithm's mechanics.
+
+Concretely, this is a simplified reproduction of two ablations from ["Reinforcing Multi-Turn
 Reasoning in LLM Agents via Turn-Level Reward Design"](https://arxiv.org/abs/2505.11821)
-(arXiv:2505.11821) — specifically its Appendix E case study, stated in the paper's own terms:
-
-- **`GRPO-OR`** (Outcome Reward): reward = final-answer correctness + format only.
-- **`GRPO-MR`** (Merged Reward): the same, plus a bonus for surfacing a real supporting-fact
-  passage during search.
-
-Both conditions run the exact same multi-turn Wikipedia-search agent and the exact same
-underlying RL algorithm — only the reward signal changes between the two training runs.
-
-The paper's own best-performing method, `PPO`/`MT-PPO`, is a second, real comparison this repo
-also builds — a custom multi-turn PPO trainer (Phase 7), plus the paper's separate LLM-as-judge
-reward exploration via `gpt-oss-120b` on an OpenAI-compatible Bedrock endpoint (Phase 8). See
-`CLAUDE.md`'s Roadmap for status. `MT-GRPO` (a further turn-level credit-assignment scheme
-specific to GRPO) remains out of scope — see `CLAUDE.md` for why.
+(arXiv:2505.11821): its Appendix E GRPO case study (`GRPO-OR`/`GRPO-MR`), and its main-results PPO
+comparison (`PPO`/`MT-PPO`). See `CLAUDE.md`'s Roadmap for what's built and what's still in
+progress. (`MT-GRPO`, a further turn-level credit-assignment scheme specific to GRPO, remains out
+of scope — see `CLAUDE.md` for why.)
 
 ## Quick Start
 

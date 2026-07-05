@@ -1,4 +1,4 @@
-# Outcome-Only vs. Merged-Reward GRPO
+# Outcome vs. Turn-Level Reward for Multi-Turn Search Agents
 
 ## Goal
 
