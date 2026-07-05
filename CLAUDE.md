@@ -1,4 +1,4 @@
-# Outcome-Only vs. Merged-Reward GRPO
+# Outcome vs. Turn-Level Reward for Multi-Turn Search Agents
 
 ## Goal
 
@@ -19,25 +19,33 @@ reward functions are summed. This is *not* a single-turn vs. multi-turn comparis
 vs. dense reward on top of an identical multi-turn architecture and identical advantage
 estimation, which is exactly what the paper's own `GRPO-OR`/`GRPO-MR` ablation isolates.
 
-### Explicitly out of scope (and why)
+### Beyond the GRPO-OR/GRPO-MR comparison: PPO/MT-PPO (Phases 7-8, committed) and MT-GRPO (still out of scope)
 
-The paper proposes two further algorithms beyond `GRPO-OR`/`GRPO-MR`; neither is attempted here:
+The paper proposes two further algorithms beyond `GRPO-OR`/`GRPO-MR`. One of them is now part of
+this repo's real, committed roadmap — not a maybe:
 
-- **`MT-GRPO`** — the paper's actual turn-level credit-assignment contribution: a *separate*
-  advantage computed per turn via extra per-state rollouts (Eq. 5, Appendix D), instead of one
-  trajectory-wide advantage. Out of scope because TRL's `GRPOTrainer` has no supported hook to
-  override its built-in advantage computation with a custom per-turn one — doing this for real
-  means patching non-public trainer internals, not a documented extension point.
 - **`PPO` / `MT-PPO`** — the paper's actual best-performing, most-benchmarked method (all of
-  Table 2's real numbers are PPO/MT-PPO, not MT-GRPO). Out of scope because TRL's `PPOTrainer` is
-  experimental and has **no multi-turn tool-calling support at all** (no `environment_factory`
-  equivalent — confirmed directly against TRL's current docs). A real MT-PPO would mean
-  hand-building the multi-turn rollout loop, a critic/value head, and GAE with turn-boundary
-  reward placement (Eq. 9) essentially from scratch — a much larger lift than this pass's scope.
-
-Both are legitimate follow-on directions, not ruled out permanently — just not part of this
-comparison. If either is picked up later, it should get its own phase doc under `docs/` rather
-than being folded into the existing `outcome_only`/`turn_level` roadmap.
+  Table 2's real numbers are PPO/MT-PPO, not MT-GRPO). **This is Phases 7-8 of this repo's
+  roadmap, not out of scope.** Re-checked directly (not assumed stale): TRL's `PPOTrainer`
+  (`trl.experimental.ppo`) still has **no multi-turn tool-calling support**, confirmed fresh
+  against both the installed version and the current dev branch — recent TRL commits added
+  tool-calling to `GRPOTrainer`, `KTOTrainer`, and `RLOOTrainer`, but never `PPOTrainer`. So Phase
+  7 hand-builds the multi-turn rollout loop, a critic/value head, and GAE with turn-boundary
+  reward placement (Eq. 9) on top of `transformers.Trainer` directly — the two riskiest pieces of
+  that build (the critic architecture, and driving the tool-calling loop manually) were verified
+  working end-to-end before committing to this plan; see
+  `docs/superpowers/specs/2026-07-05-phase-7-mt-ppo-design.md`. Phase 7 reproduces the paper's
+  actual Table 2 methodology (deterministic rewards only); Phase 8 adds the paper's separate
+  LLM-as-judge exploration (Appendix C.2/C.3, `gpt-oss-120b` via an OpenAI-compatible Bedrock
+  endpoint) on top of a working Phase 7. See the Roadmap section below and
+  `docs/phase-7-mt-ppo.md`/`docs/phase-8-llm-judge.md`.
+- **`MT-GRPO`** — the paper's actual turn-level credit-assignment contribution for GRPO
+  specifically: a *separate* advantage computed per turn via extra per-state rollouts (Eq. 5,
+  Appendix D), instead of one trajectory-wide advantage. **Still out of scope, unrelated to the
+  PPO work above.** TRL's `GRPOTrainer` has no supported hook to override its built-in advantage
+  computation with a custom per-turn one — doing this for real means patching non-public trainer
+  internals, not a documented extension point. A legitimate follow-on direction, not ruled out
+  permanently — if picked up later, it should get its own phase doc under `docs/`.
 
 ## Why this design (retrieval backend choice)
 
@@ -154,9 +162,31 @@ vLLM for a first pass; vLLM colocate mode available later if generation throughp
   completion) **only when `environment_factory` is set** — this is how turn-level state
   (e.g. `environment.retrieval_fraction`) gets back to the reward function.
 - `GRPOConfig(max_tool_calling_iterations=N)` is the hard cutoff on tool-calling turns (currently
-  unlimited by default, bounded only by `max_completion_length`). Recommend setting this as a
-  safety net (e.g. `4`) *above* the soft instructed limit given in the prompt (e.g. "at most 2
-  searches") so early, not-yet-compliant rollouts aren't truncated mid-trajectory.
+  unlimited by default, bounded only by `max_completion_length`). **Finalized: `N=4`.**
+  Confirmed directly against TRL's `_tool_call_loop` source
+  (`trl/trainer/grpo_trainer.py`): `iteration_num` increments once per *(execute pending tool
+  calls → generate the model's next turn)* round; the initial pre-tool-call generation doesn't
+  count. So a fully-compliant rollout that does exactly the prompt's soft "at most 2 searches"
+  (see Dataset/Reward design sections) consumes **exactly 2 iterations** and would never hit a
+  cap set to 2 — it needs to be strictly above 2 or compliant rollouts get truncated before they
+  can even answer, silently corrupting the reward signal. `N=4` leaves 2 full rounds of slack
+  above that soft limit, so early-training rollouts that haven't yet learned the "at most 2"
+  instruction (e.g. search 3-4 times) still complete and receive an honest — probably
+  penalized — reward instead of being cut off mid-search with no answer at all. Not set higher
+  than 4: each extra iteration is a full extra generation pass per rollout, and `format_reward`'s
+  `-0.1` penalty for a missing `<answer>` is the right way to unlearn persistent
+  over-searching, not a cutoff patient enough to wait it out.
+- **This repo's "at most 2 searches" is a confirmed, deliberate deviation from the paper**, not
+  an oversight. The paper's own Appendix E.1 (Task Formulation) states its GRPO case study caps
+  the agent at **exactly one** search call before answering ("a simplified two-turn tool-use
+  environment... the agent is allowed to call the Wikipedia search engine at most once before
+  submitting an answer" — verified by fetching the paper's HTML version directly, not assumed
+  from memory). This repo uses 2 instead because HotpotQA is genuinely 2-hop (avg exactly 2.00
+  unique gold supporting-fact titles/row, already confirmed above) — a hard 1-search cap would
+  make it structurally impossible to ever surface both gold passages, capping `retrieval_fraction`
+  at ~50% regardless of policy quality. See
+  `docs/superpowers/specs/2026-07-04-phase-3-data-pipeline-design.md` (lines ~29-30) for where
+  this was first decided.
 - `beta` (KL penalty) defaults to `0.0` in TRL — no reference model needed, saves memory.
 - Multiple `reward_funcs` are summed (or weighted via `reward_weights`); returning `None` from a
   reward function lets it abstain per-example (not needed here — no task-mixing).
@@ -165,14 +195,39 @@ vLLM for a first pass; vLLM colocate mode available later if generation throughp
 ## Reward design (the crux decision)
 
 **Terminology**: `outcome_only` below is the paper's `GRPO-OR`; `turn_level` is the paper's
-`GRPO-MR`. See the Goal section's "Explicitly out of scope" note for why this stops short of the
-paper's `MT-GRPO` (no per-turn advantage estimation — both conditions use one trajectory-level
-GRPO advantage).
+`GRPO-MR`. See the Goal section's "Beyond the GRPO-OR/GRPO-MR comparison" note for why this stops
+short of the paper's `MT-GRPO` (no per-turn advantage estimation — both conditions use one
+trajectory-level GRPO advantage).
 
 Shared outcome component (identical in both conditions):
 - `format_reward`: small ±0.1 nudge for a parseable final-answer tag.
 - `outcome_reward`: SQuAD-style F1 (0 to 1) + 0.5 bonus for exact match, maxed over
   `golden_answers`. Range ~[0, 1.5].
+
+**This F1+EM-bonus outcome reward is a confirmed, deliberate deviation from the paper**, not an
+oversight — parallel to the "at most 2 searches" deviation above. Fetched the paper's GRPO
+Appendix E directly: its outcome reward there is **pure binary exact-match** ("Awards 1.0 if the
+model's answer... exactly matches any accepted answer," 0.0 otherwise) — no partial credit. (A
+separate, richer LLM-as-judge scoring scheme exists in the paper too, using `gpt-oss-120b` — that's
+Phase 8's scope, built on top of Phase 7's PPO/MT-PPO work, not this GRPO comparison; see the Goal
+section above.)
+
+This repo uses F1+EM-bonus instead because GRPO's only learning signal is *within-group reward
+variance* (the group-relative advantage) — a pure binary EM reward means any group of rollouts
+that all miss the exact answer (plausible early in training, before the policy has learned
+anything) scores identically 0.0 across the whole group, giving zero variance and thus zero
+gradient. That is exactly the `frac_reward_zero_std`-stuck-at-1.0 failure mode
+`TrackioAlertCallback` (Phase 4) exists to catch. F1's graduated partial credit gives GRPO
+non-identical scores to differentiate rollouts by even when no rollout in a group is exactly
+right, which matters more for this repro's compute-constrained, single-GPU, ~300-step scale than
+it likely did at whatever scale the paper trained at.
+
+This deviation does **not** confound the actual `GRPO-OR`/`GRPO-MR` comparison this repo is
+testing: both conditions share the identical `outcome_reward` formula, so it's orthogonal to the
+one variable under test (whether `turn_reward` helps). It does mean this repro's absolute
+reward/EM numbers won't be directly comparable to the paper's own Table 5 figures — only the
+*relative* outcome_only-vs-turn_level comparison is being reproduced here, which is what the
+Goal section above already states as the scope, not the paper's headline absolute numbers.
 
 Turn-level component (`turn_level` condition only):
 - `turn_reward = 0.4 * retrieval_fraction`, where `retrieval_fraction` = fraction of the (usually
@@ -188,21 +243,22 @@ error. Because GRPO scores one scalar per completed trajectory (no per-timestep 
 this is turn-level credit assignment *via reward density*, not a literal per-step RL change —
 state that explicitly in code comments so it's not mistaken for more than it is.
 
-## Repo layout (planned)
+## Repo layout
 
 ```
 src/turn_level_rewards/
-    env.py             # SearchEnv (environment_factory) - calls the retrieval server over HTTP
-    metrics.py         # normalize_answer / exact_match / f1_score (SQuAD-style, stdlib only)
-    rewards.py         # format_reward, outcome_reward, turn_reward, get_reward_funcs(condition)
-    data.py            # dataset loading/filtering (nq_hotpotqa_train train, hotpot_qa validation)
-    train.py           # CLI: python -m turn_level_rewards.train --condition {outcome_only,turn_level}
-    evaluate.py         # run a trained checkpoint over held-out eval set, write metrics json
+    env.py             # SearchEnv (environment_factory) - calls the retrieval server over HTTP [done]
+    metrics.py         # normalize_answer / exact_match / f1_score (SQuAD-style, stdlib only) [done]
+    rewards.py         # format_reward, outcome_reward, turn_reward, get_reward_funcs(condition) [done]
+    data.py            # dataset loading/filtering (nq_hotpotqa_train train, hotpot_qa validation) [done]
+    train.py           # CLI: python -m turn_level_rewards.train --condition {outcome_only,turn_level} [done]
+    evaluate.py         # run a trained checkpoint over held-out eval set, write metrics json [Phase 6, not yet built]
 scripts/
-    setup_retrieval.sh # download wiki-18 corpus+index, launch the Pyserini retrieval server
-    compare_runs.py    # plot reward/EM/retrieval curves for both conditions
+    setup_retrieval.sh # download wiki-18 corpus+index, launch the Pyserini retrieval server [done]
+    verify_phase{1,2,3,4}.py  # per-phase exit-criteria gates [done]
+    compare_runs.py    # plot reward/EM/retrieval curves for both conditions [Phase 6, not yet built]
 tests/unit/
-    test_env.py / test_rewards.py / test_metrics.py   # no GPU, no live retrieval server needed
+    test_env.py / test_rewards.py / test_metrics.py / test_data.py / test_train.py   # no GPU, no live retrieval server needed [done]
 ```
 
 **Test location is `tests/unit/` only.** Do not add other test tiers (integration tests against
@@ -284,8 +340,10 @@ in one dashboard, rather than separate projects.
 
 ## Roadmap
 
-Design finalized (Option B). Implementation is split into 6 phases, each in its own doc under
-`docs/`, so a fresh agent with no memory of this conversation can pick up any single phase.
+Design finalized (Option B). Implementation is split into 8 phases, each in its own doc under
+`docs/`, so a fresh agent with no memory of this conversation can pick up any single phase. All 8
+are committed work, not optional stretch goals — Phases 7-8 (PPO/MT-PPO + LLM judge) are a second,
+real comparison alongside the GRPO-OR/GRPO-MR one Phases 1-6 build, not a maybe-someday item.
 **Read this file (CLAUDE.md) in full first, then the specific phase doc, then the previous
 phase's "Handoff notes" section** — that's the actual handoff mechanism between phases.
 
@@ -294,9 +352,11 @@ phase's "Handoff notes" section** — that's the actual handoff mechanism betwee
 | 1 | Retrieval infra: JDK, wiki-18 download, retrieval server | `docs/phase-1-retrieval-infra.md` | **Done** — server running, `verify_retrieval.py` passes; see phase doc's Handoff notes for the launch command, a `retrieval_server.py` bug fix, and a correction to this file's "confirmed present" title examples |
 | 2 | Core library: `env.py`, `rewards.py`, `metrics.py` + `tests/unit/` | `docs/phase-2-core-library.md` | **Done** — merged to `main` via PR #2; `scripts/verify_phase2.py` passes; see phase doc's Handoff notes for the confirmed `reset()` contract and a flagged Phase 3/4 gap (dataset's `prompt` column needs replacing) |
 | 3 | Data pipeline: `data.py` | `docs/phase-3-data-pipeline.md` | **Done** — `scripts/verify_phase3.py` passes; real row counts confirmed (90,447 train / 7,405 eval); see phase doc's Handoff notes for the injectable-loader-seam deviation, the exact system prompt location, a `load_train_dataset` bug fix (HF `datasets` was preparing the already-documented-broken `test` split even when only `train` was requested), and a measurement clarification on the "avg supporting facts/row" figure (2.00 holds for unique titles, matching `env.py`'s dedup logic; the raw non-deduped count is 2.385) |
-| 4 | `train.py` + live smoke test | `docs/phase-4-training-smoke-test.md` | Not started |
+| 4 | `train.py` + live smoke test | `docs/phase-4-training-smoke-test.md` | **Done** — `scripts/verify_phase4.py` passes; live smoke test succeeded for both conditions (real tool calls, real retrieved passages, `turn_reward` confirmed genuinely nonzero, zero trackio alerts); see phase doc's Handoff notes for three real bugs the smoke test caught (a `GRPOConfig` divisibility constraint, two missing runtime dependencies, a docstring-format bug in Phase 2's `env.py`) and a CUDA OOM fixed with `gradient_checkpointing=True` |
 | 5 | Full training runs (both conditions) | `docs/phase-5-full-training-runs.md` | Not started |
 | 6 | `evaluate.py` + `compare_runs.py` + write-up | `docs/phase-6-evaluation-comparison.md` | Not started |
+| 7 | Multi-turn PPO / MT-PPO (custom trainer, deterministic rewards) | `docs/phase-7-mt-ppo.md` | Not started — design complete, see `docs/superpowers/specs/2026-07-05-phase-7-mt-ppo-design.md` |
+| 8 | LLM-as-judge reward (Bedrock + gpt-oss), on top of Phase 7 | `docs/phase-8-llm-judge.md` | Not started |
 
 Each phase doc is self-contained: goal, prerequisites (= previous phase's exit criteria), a task
 checklist, exit criteria, and a **Handoff notes** section the executing agent fills in before
