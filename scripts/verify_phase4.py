@@ -84,11 +84,9 @@ def check() -> list[str]:
                 f"({config.per_device_train_batch_size}) != num_generations "
                 f"({config.num_generations})"
             )
-        if (
-            config.generation_batch_size is not None
-            and config.num_generations is not None
-            and config.generation_batch_size % config.num_generations != 0
-        ):
+        assert config.generation_batch_size is not None
+        assert config.num_generations is not None
+        if config.generation_batch_size % config.num_generations != 0:
             failures.append(
                 f"build_config({label!r}).generation_batch_size not divisible by num_generations"
             )
@@ -97,6 +95,11 @@ def check() -> list[str]:
         failures.append(f"outcome_only output_dir == {outcome_config.output_dir!r}")
     if turn_config.output_dir != "outputs/turn_level":
         failures.append(f"turn_level output_dir == {turn_config.output_dir!r}")
+
+    if outcome_config.run_name != "outcome_only":
+        failures.append(f"outcome_only run_name == {outcome_config.run_name!r}")
+    if turn_config.run_name != "turn_level":
+        failures.append(f"turn_level run_name == {turn_config.run_name!r}")
 
     if not issubclass(TrackioAlertCallback, TrainerCallback):
         failures.append("TrackioAlertCallback does not subclass transformers.TrainerCallback")
