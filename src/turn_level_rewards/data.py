@@ -67,8 +67,20 @@ def load_train_dataset(
         seed: Shuffle seed.
         load_dataset_fn: Injectable seam for the real datasets.load_dataset call -- tests pass a
             fake returning an in-memory Dataset.
+
+    Note: `data_files` pins this to the repo's `train.parquet` explicitly. Without it,
+    `datasets.load_dataset(..., split="train")` still runs `download_and_prepare()` over *every*
+    split the repo exposes (both `train.parquet` and `test.parquet`) before slicing out the
+    requested one -- and this repo's `test.parquet` has the broken/mixed schema documented in
+    CLAUDE.md's "Dataset" section, so it throws `DatasetGenerationError` even though `test` is
+    never requested. Confirmed by direct reproduction (Task 3's manual real-data check).
     """
-    ds = load_dataset_fn("PeterJinGo/nq_hotpotqa_train", "default", split="train")
+    ds = load_dataset_fn(
+        "PeterJinGo/nq_hotpotqa_train",
+        "default",
+        data_files={"train": "train.parquet"},
+        split="train",
+    )
     ds = ds.filter(lambda row: row["data_source"] == "hotpotqa")
     ds = ds.shuffle(seed=seed)
     if n is not None:
