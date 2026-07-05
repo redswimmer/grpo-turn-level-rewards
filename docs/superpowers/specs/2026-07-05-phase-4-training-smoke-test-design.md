@@ -32,6 +32,21 @@ live retrieval server — not by trusting CLAUDE.md's prose to still be exactly 
 - **`GRPOConfig` defaults, inspected directly**: `logging_steps=10`, `logging_nan_inf_filter=True`,
   `max_completion_length=256`, `num_generations=8`, `per_device_train_batch_size=8`,
   `learning_rate=1e-6`, `max_tool_calling_iterations=None` (unlimited).
+- **`GRPOConfig.__post_init__` (`grpo_config.py:986-1025`), read directly, and confirmed by actually
+  constructing configs**: `generation_batch_size` defaults to `per_device_train_batch_size ×
+  num_processes × steps_per_generation`, and must be evenly divisible by `num_generations` ("the
+  generation batch must contain full prompt groups, no partials"). With single-GPU defaults
+  (`num_processes=1`, `steps_per_generation` defaulting to `gradient_accumulation_steps=1`), this
+  reduces to **`per_device_train_batch_size` must be a multiple of `num_generations`**. Phase 4's
+  own doc's literal smoke-test wording (`num_generations=2, per_device_train_batch_size=1`) violates
+  this and was confirmed to raise `ValueError` when actually constructed. Fixed by setting
+  `per_device_train_batch_size = num_generations` always (see "CLI" below) — confirmed by
+  constructing real `GRPOConfig` objects at both `num_generations=2` (smoke-test scale) and
+  `num_generations=8` (a production-scale example), both succeeding with every other fixed field
+  from this spec applied simultaneously. Also confirmed `do_eval=False`/`eval_strategy=NO` by
+  default, so the separate eval-side divisibility check (`grpo_config.py:1008-1017`) never
+  triggers, since in-training eval is intentionally left off — Phase 6's `evaluate.py` handles
+  held-out evaluation separately, per CLAUDE.md's plan.
 - **`transformers/trainer.py:1745-1751`, read directly**: when `logging_nan_inf_filter=True` (the
   default), a NaN/Inf loss step is *not* recorded as NaN — the accumulator substitutes a decayed
   average of previous losses instead, specifically to keep the logged loss curve from looking
@@ -75,9 +90,13 @@ def build_config(
     seed: int,
     max_steps: int,
     num_generations: int,
-    per_device_train_batch_size: int,
 ) -> GRPOConfig:
-    """Pure function, no model/GPU/network touched. Unit-testable."""
+    """Pure function, no model/GPU/network touched. Unit-testable.
+
+    per_device_train_batch_size is derived as num_generations (not a separate parameter) -- see
+    Context above for why: GRPOConfig requires generation_batch_size divisible by
+    num_generations, which trivially holds when per_device_train_batch_size == num_generations.
+    """
 
 class TrackioAlertCallback(TrainerCallback):
     """Diagnostic alerts for silent-failure modes that a clean exit code wouldn't catch.
@@ -103,16 +122,20 @@ train.py --condition {outcome_only,turn_level}   # required
   --train-size 8            # Phase 4's own "4-8 rows" smoke-test slice
   --eval-size 8
   --max-steps 2
-  --num-generations 2
-  --per-device-train-batch-size 1
+  --num-generations 2        # per_device_train_batch_size is derived as equal to this, not a separate flag
 ```
 
 **The bare invocation *is* the smoke test.** `train.py --condition outcome_only` with no other
 flags runs Phase 4's smoke test directly — no separate "smoke test mode" branch in the code.
 Phase 5's full runs must deliberately pass every scale flag explicitly (e.g. `--train-size 90447
---num-generations 8 --per-device-train-batch-size 4 --max-steps <N>`). This means the smoke test
-exercises the exact same code path the full runs will use, not a parallel branch that could
-silently diverge from it.
+--num-generations 8 --max-steps <N>`). This means the smoke test exercises the exact same code
+path the full runs will use, not a parallel branch that could silently diverge from it.
+
+**No separate `--per-device-train-batch-size` flag** — confirmed via real `GRPOConfig`
+construction (see Context above) that `per_device_train_batch_size` must be a multiple of
+`num_generations`; deriving it as always equal avoids exposing a knob whose valid range depends on
+another knob's value, with no loss of capability at this project's scale (CLAUDE.md already
+expects the 0.8B model to fit without vLLM "for a first pass").
 
 ## `build_config`'s fixed hyperparameters (same for both conditions, not CLI flags)
 
