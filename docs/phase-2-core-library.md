@@ -48,15 +48,18 @@ concrete tasks.
 - [x] `src/turn_level_rewards/metrics.py`: `normalize_answer`, `exact_match`, `f1_score`
       (SQuAD-style, stdlib only — no new dependencies for this file).
 - [x] `src/turn_level_rewards/env.py`: `SearchEnv` class.
-      - `reset(self, context, supporting_facts, **kwargs) -> str | None` — resets all mutable
-        per-episode state (remember: TRL reuses instances from a pool; leftover state from a
-        prior episode is a real bug class here, not a hypothetical).
+      - `reset(self, metadata, **kwargs) -> None` — resets all mutable per-episode state
+        (remember: TRL reuses instances from a pool; leftover state from a prior episode is a
+        real bug class here, not a hypothetical). **As actually built** (see Handoff notes): this
+        takes the row's nested `metadata` dict directly (`metadata["supporting_facts"]["title"]`),
+        not flat `context`/`supporting_facts` kwargs as originally sketched here — confirmed
+        against a real dataset row before implementation, not assumed.
       - `search(self, query: str) -> str` tool method — calls the retrieval server. **The HTTP
         client/call itself must be injectable** (constructor parameter, module-level default
         factory, or similar) — this is the seam principle 1 in CLAUDE.md refers to concretely.
-        Extracts `{title, text}` from each returned document via
-        `contents.split("\n")[0].strip('"')` (matching Search-R1's own parsing, confirmed in
-        CLAUDE.md).
+        **As actually built**: trusts `document["title"]`/`document["text"]` directly from the
+        retrieval server's response — no `contents.split(...)` re-parsing in `env.py`, since the
+        server already does that parsing itself (confirmed by reading `retrieval_server.py`).
       - Tracks `retrieval_fraction` (dedup'd fraction of gold `supporting_facts` titles actually
         surfaced), capped at 1.0.
 - [x] `src/turn_level_rewards/rewards.py`:
