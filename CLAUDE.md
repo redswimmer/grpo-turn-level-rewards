@@ -196,6 +196,31 @@ Shared outcome component (identical in both conditions):
 - `outcome_reward`: SQuAD-style F1 (0 to 1) + 0.5 bonus for exact match, maxed over
   `golden_answers`. Range ~[0, 1.5].
 
+**This F1+EM-bonus outcome reward is a confirmed, deliberate deviation from the paper**, not an
+oversight — parallel to the "at most 2 searches" deviation above. Fetched the paper's GRPO
+Appendix E directly: its outcome reward there is **pure binary exact-match** ("Awards 1.0 if the
+model's answer... exactly matches any accepted answer," 0.0 otherwise) — no partial credit. (A
+separate, richer LLM-as-judge scoring scheme exists in the paper, but only as an optional PPO
+supplement in Appendix C.2, using `gpt-oss-120b`; irrelevant here since `PPO`/`MT-PPO` are already
+out of scope per the Goal section above.)
+
+This repo uses F1+EM-bonus instead because GRPO's only learning signal is *within-group reward
+variance* (the group-relative advantage) — a pure binary EM reward means any group of rollouts
+that all miss the exact answer (plausible early in training, before the policy has learned
+anything) scores identically 0.0 across the whole group, giving zero variance and thus zero
+gradient. That is exactly the `frac_reward_zero_std`-stuck-at-1.0 failure mode
+`TrackioAlertCallback` (Phase 4) exists to catch. F1's graduated partial credit gives GRPO
+non-identical scores to differentiate rollouts by even when no rollout in a group is exactly
+right, which matters more for this repro's compute-constrained, single-GPU, ~300-step scale than
+it likely did at whatever scale the paper trained at.
+
+This deviation does **not** confound the actual `GRPO-OR`/`GRPO-MR` comparison this repo is
+testing: both conditions share the identical `outcome_reward` formula, so it's orthogonal to the
+one variable under test (whether `turn_reward` helps). It does mean this repro's absolute
+reward/EM numbers won't be directly comparable to the paper's own Table 5 figures — only the
+*relative* outcome_only-vs-turn_level comparison is being reproduced here, which is what the
+Goal section above already states as the scope, not the paper's headline absolute numbers.
+
 Turn-level component (`turn_level` condition only):
 - `turn_reward = 0.4 * retrieval_fraction`, where `retrieval_fraction` = fraction of the (usually
   2) gold `supporting_facts` titles actually surfaced by a `search()` call during the episode
