@@ -13,6 +13,7 @@ dependencies = [
     "fastapi>=0.139.0",
     "huggingface-hub>=1.22.0",
     "jmespath>=1.0.1",
+    "matplotlib>=3.10.0",
     "pydantic>=2.13.4",
     "pyserini>=2.3.0",
     "requests>=2.34.2",
@@ -62,3 +63,6 @@ python-version = "3.13"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/turn_level_rewards"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
