@@ -142,12 +142,16 @@ warranted, not optional polish:
    prompts**, not a different seed. `distinct_prompts = max_steps / num_iterations` = `max_steps /
    2` at this repo's config, so e.g. `--max-steps 600` doubles training to 300 distinct prompts per
    condition.
-3. **Neither condition reproduces the paper's tool-call-frequency mechanism** (`outcome_only`'s
-   `train/tools/call_frequency` staying flat rather than declining the way the paper describes).
-   150 distinct prompts may just be too short a run for that dynamic to emerge — before concluding
-   it's a fundamental mismatch with the paper, try **extending `outcome_only` specifically** (it's
-   the one condition the claim is about) to more steps and re-check the trend, rather than assuming
-   the claim doesn't transfer.
+3. **`outcome_only`'s tool-call-frequency doesn't reproduce the paper's claimed mechanism**
+   (the paper says `GRPO-OR` "gradually stops calling search tools"; check `outcome_only`'s
+   `train/tools/call_frequency` for a declining trend, not staying flat or rising). 150 distinct
+   prompts may just be too short a run for that dynamic to emerge — but re-check it by extending
+   **both conditions equally**, not `outcome_only` alone. Extending only the condition the claim
+   is about would confound this phase's actual, controlled comparison (the whole point of the
+   Goal section's "same agent, same algorithm, only the reward differs" design) with an unequal
+   training budget — any resulting change could be "more steps," not "reward design," and either
+   way the two decisions (does the mechanism eventually appear; does turn-level reward still win)
+   need to share one apples-to-apples run, not two runs at different scales.
 4. **`turn_level`'s held-out `retrieval_fraction` continues the downward trend Phase 5 flagged**
    (0.41 → 0.31 during training) rather than stabilizing. If confirmed still falling at the end of
    training, more steps would show whether it's a real, ongoing problem with `turn_reward`'s
@@ -156,6 +160,14 @@ warranted, not optional polish:
 
 If none of these trigger, the current 150-distinct-prompt runs are sufficient to report a real,
 if modest-scale, finding — don't manufacture a reason to keep training past a clean result.
+
+**If any criterion triggers, resolve all of them with one symmetric re-run**, not a patchwork of
+condition-specific fixes: re-run both conditions at the same larger `--max-steps` (e.g. `600`,
+doubling to 300 distinct prompts each) and the same new `--seed` if criterion 1 also triggered.
+A single equal-budget re-run re-checks the EM/F1 gap (criterion 1), the held-out/training-trend
+consistency (criterion 2), `outcome_only`'s call-frequency trend over a longer horizon
+(criterion 3), and `turn_level`'s retrieval_fraction trend (criterion 4) simultaneously, with
+both conditions always seeing the identical budget.
 
 ## Exit criteria (all must be true before handing off — this is the last phase)
 
