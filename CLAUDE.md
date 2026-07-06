@@ -191,6 +191,24 @@ vLLM for a first pass; vLLM colocate mode available later if generation throughp
 - Multiple `reward_funcs` are summed (or weighted via `reward_weights`); returning `None` from a
   reward function lets it abstain per-example (not needed here — no task-mixing).
 - `environment_factory` requires `transformers>=5.2.0`.
+- **Periodic in-training eval (`GRPOConfig(eval_strategy="steps")`) is incompatible with
+  `environment_factory` at large `num_generations`, in the installed `trl==1.7.1`.** Confirmed by
+  a real canary run: `GRPOTrainer`'s `environments` pool (required by `SearchEnv`) is built once at
+  init, sized to train's `generation_batch_size`, and reused unconditionally for both train and
+  eval (`grpo_trainer.py:544-545`, `1982`) — the moment eval ran with a smaller per-step batch than
+  train's, this raised `ValueError: zip() argument 2 is longer than argument 1`. Matching eval's
+  batch size to train's instead reproduces the exact per-token-logps OOM documented in
+  `docs/superpowers/specs/2026-07-05-phase-5-full-training-runs-design.md`, with no eval-side
+  chunking knob available to work around it. **Already fixed upstream**, not yet released: TRL's
+  `main` branch (commit `8b61980d`, "Support multiple environments [1/2]: Pool and build
+  environment tool dicts at batch time", PR #6001, merged 2026-07-01) rebuilds the `environments`
+  list at batch time, sized to `len(inputs)` for whichever batch (train or eval) is currently
+  running — confirmed NOT an ancestor of the `v1.7.1` tag (`git merge-base --is-ancestor 8b61980d
+  v1.7.1` → false) or any later PyPI release as of this writing. **Revisit if the live eval-reward
+  curve is wanted later**: pin `trl` to a commit including `8b61980d` (accepting the stability
+  tradeoff of an unreleased, unversioned dev build) and re-enable `eval_strategy="steps"` in
+  `train.py`'s `build_config`. Until then, Phase 5 does not enable periodic eval — Phase 6's
+  `evaluate.py` (one full post-hoc run over the entire held-out set) is the only held-out signal.
 
 ## Reward design (the crux decision)
 
@@ -353,7 +371,7 @@ phase's "Handoff notes" section** — that's the actual handoff mechanism betwee
 | 2 | Core library: `env.py`, `rewards.py`, `metrics.py` + `tests/unit/` | `docs/phase-2-core-library.md` | **Done** — merged to `main` via PR #2; `scripts/verify_phase2.py` passes; see phase doc's Handoff notes for the confirmed `reset()` contract and a flagged Phase 3/4 gap (dataset's `prompt` column needs replacing) |
 | 3 | Data pipeline: `data.py` | `docs/phase-3-data-pipeline.md` | **Done** — `scripts/verify_phase3.py` passes; real row counts confirmed (90,447 train / 7,405 eval); see phase doc's Handoff notes for the injectable-loader-seam deviation, the exact system prompt location, a `load_train_dataset` bug fix (HF `datasets` was preparing the already-documented-broken `test` split even when only `train` was requested), and a measurement clarification on the "avg supporting facts/row" figure (2.00 holds for unique titles, matching `env.py`'s dedup logic; the raw non-deduped count is 2.385) |
 | 4 | `train.py` + live smoke test | `docs/phase-4-training-smoke-test.md` | **Done** — `scripts/verify_phase4.py` passes; live smoke test succeeded for both conditions (real tool calls, real retrieved passages, `turn_reward` confirmed genuinely nonzero, zero trackio alerts); see phase doc's Handoff notes for three real bugs the smoke test caught (a `GRPOConfig` divisibility constraint, two missing runtime dependencies, a docstring-format bug in Phase 2's `env.py`) and a CUDA OOM fixed with `gradient_checkpointing=True` |
-| 5 | Full training runs (both conditions) | `docs/phase-5-full-training-runs.md` | Not started |
+| 5 | Full training runs (both conditions) | `docs/phase-5-full-training-runs.md` | **Done** — both conditions completed 300/300 steps, checkpoints saved and loadable, no unresolved alerts; see phase doc's Handoff notes for two real bugs live runs caught (an OOM survived by the first micro-batching fix, then a silent policy collapse from a `steps_per_generation`/`gradient_accumulation_steps` mixup), an unrelated infra fix (transient systemd cgroup killing long-running processes, worked around with `systemd-run`), the resulting 150-distinct-training-prompts figure and why the paper's own text leaves that ambiguous, and first training-batch results (both conditions show real learning; `turn_level` directionally ahead of `outcome_only` on EM/F1, not yet a rigorous claim pending Phase 6's held-out eval) |
 | 6 | `evaluate.py` + `compare_runs.py` + write-up | `docs/phase-6-evaluation-comparison.md` | Not started |
 | 7 | Multi-turn PPO / MT-PPO (custom trainer, deterministic rewards) | `docs/phase-7-mt-ppo.md` | Not started — design complete, see `docs/superpowers/specs/2026-07-05-phase-7-mt-ppo-design.md` |
 | 8 | LLM-as-judge reward (Bedrock + gpt-oss), on top of Phase 7 | `docs/phase-8-llm-judge.md` | Not started |

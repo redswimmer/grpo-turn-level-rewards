@@ -28,11 +28,39 @@ in multi-turn agent RL, not an artifact of one algorithm's mechanics.
 Concretely, this is a simplified reproduction of two ablations from ["Reinforcing Multi-Turn
 Reasoning in LLM Agents via Turn-Level Reward Design"](https://arxiv.org/abs/2505.11821)
 (arXiv:2505.11821): its Appendix E GRPO case study (`GRPO-OR`/`GRPO-MR`), and its main-results PPO
-comparison (`PPO`/`MT-PPO`). See `CLAUDE.md`'s Roadmap for what's built and what's still in
-progress. (`MT-GRPO`, a further turn-level credit-assignment scheme specific to GRPO, remains out
-of scope — see `CLAUDE.md` for why.)
+comparison (`PPO`/`MT-PPO`).
 
-## Quick Start
+## Results
+
+The GRPO comparison (outcome-only vs. turn-level reward) has completed its first pair of training
+runs. Both conditions trained on the same number of steps and the same question pool; numbers
+below compare each run's early training performance to its late training performance:
+
+| Metric | Outcome reward (early → late) | Turn-level reward (early → late) |
+|---|---|---|
+| Exact match | 0.17 → 0.22 | 0.21 → 0.23 |
+| F1 | 0.25 → 0.31 | 0.30 → 0.34 |
+| Well-formed answer rate | 0.95 → 1.00 | 0.88 → 0.99 |
+| Real passage surfaced during search | n/a | 0.41 → 0.31 |
+
+Both conditions show real learning — exact match and F1 both improve over training. Turn-level
+reward starts and ends somewhat ahead of outcome-only on both, directionally consistent with the
+paper's hypothesis that denser feedback helps. This is training-performance data, not a held-out
+evaluation, so it's a first signal rather than a rigorous claim — the real test (a full pass over
+thousands of held-out questions the model never trained on, plus comparison charts) is still
+ahead. One thing to watch there: turn-level reward's rate of surfacing a real supporting passage
+during search *dropped* over training rather than rising, worth checking against held-out data
+rather than assuming it's noise.
+
+## Roadmap
+
+- **GRPO: outcome-only vs. merged-reward** — training complete for both conditions; held-out
+  evaluation and comparison charts not yet built.
+- **PPO: outcome-only vs. merged-reward** — design complete; not yet started.
+- **LLM-as-judge reward** (an alternative to exact-match/F1 scoring, explored on top of the PPO
+  comparison) — not yet started.
+
+## Reproducing this
 
 ### Prerequisites
 
@@ -86,8 +114,7 @@ uv run python -m turn_level_rewards.train --condition turn_level
 
 The bare invocation above (no extra flags) runs at smoke-test scale — 8 rows, 2 steps, a real
 `Qwen/Qwen3.5-0.8B` model against the retrieval server started above. Pass `--train-size`,
-`--max-steps`, `--num-generations`, etc. explicitly for a full-scale run; see
-`docs/phase-5-full-training-runs.md` for a paper-grounded example configuration. Both conditions
+`--max-steps`, `--num-generations`, etc. explicitly for a full-scale run. Both conditions
 log to the same [trackio](https://github.com/gradio-app/trackio) project
 (`turn-level-rewards`) — run `trackio show --project turn-level-rewards` to view.
 

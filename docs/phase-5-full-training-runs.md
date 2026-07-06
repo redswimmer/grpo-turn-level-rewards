@@ -54,73 +54,114 @@ first rather than assuming.)
 
 ## Tasks
 
-- [ ] **Add `num_iterations=2` and periodic in-training eval to `build_config`** (extends
-      `src/turn_level_rewards/train.py`, already-existing function from Phase 4): add
-      `num_iterations=2` (matches the paper's "two training iterations per batch") and
-      `eval_strategy="steps"`, `eval_steps=20` (roughly 15 eval checkpoints across a 300-step run)
-      as new fixed fields in the returned `GRPOConfig` — identical across both conditions, same as
-      every other fixed field Phase 4 already established. This is the mechanism for GRPO's real
-      analog to an "eval loss" curve: GRPO's own training loss doesn't indicate fit quality the
-      way SFT's cross-entropy loss does (a near-zero loss can just mean a step's group had
-      identical rewards, not that the policy converged) — periodic reward computed on the
-      **held-out** `eval_dataset` (already wired into `build_trainer` since Phase 4, currently
-      unused because `eval_strategy` defaults to `"no"`) is the actual signal for
-      plateau/overfitting, matching the paper's own Table 5 "validation reward" tracking. Add a
-      `tests/unit/test_train.py` case asserting both new fields on the built config. Use
-      `--eval-size 64` (a small, fast periodic subset) — distinct from Phase 6's `evaluate.py`,
-      which runs the *full* 7,405-row held-out set once, post-hoc, on the final checkpoint; the
-      two don't need to match in size.
-- [ ] **Add `log_metric` calls to `rewards.py`'s reward functions** (extends
-      `src/turn_level_rewards/rewards.py`, already-merged Phase 2 code): CLAUDE.md's "Experiment
-      tracking" section always intended `retrieval_fraction`, `exact_match`, `f1`, and
-      `format_compliance_rate` to land in trackio as clean, separate per-step curves via TRL's
-      `log_metric` reward-function kwarg (confirmed real and already wired by TRL —
-      `grpo_trainer.py:1330-1359` calls `reward_kwargs["log_metric"] = self._log_metric` — not a
-      hypothetical feature). This was never actually implemented in Phase 2 or Phase 4: right now
-      trackio only sees the *composite* reward values (`rewards/outcome_reward/mean` = F1 + 0.5·EM
-      entangled together, `rewards/turn_reward/mean` = 0.4×retrieval_fraction scaled), with no way
-      to see e.g. "did raw EM go up" or "did retrieval rate actually improve" as its own curve.
-      Add `log_metric` calls inside `outcome_reward` (log `exact_match`, `f1` per-completion),
-      `format_reward` (log `format_compliance_rate` as a 0/1 per-completion value), and
-      `turn_reward` (log `retrieval_fraction` directly, unscaled by the 0.4 magnitude weight) —
-      `log_metric` averages across the batch automatically per TRL's own doc comment. Cover with a
-      `tests/unit/test_rewards.py` case using a fake `log_metric` callable (matching this repo's
-      existing DI pattern — inject the seam, assert what was logged), not a real trackio backend.
-- [ ] Launch the `outcome_only` full run in the background (`train.py --condition outcome_only
-      --max-steps 300 --num-generations 21 --eval-size 64`). Watch the first ~20-30 steps via the
-      trackio dashboard/alerts before considering it healthy and moving on (per CLAUDE.md's
-      verification-approach ordering: simpler reward first, as a canary).
-- [ ] Once `outcome_only` looks healthy, launch the `turn_level` full run the same way
-      (`--condition turn_level`, identical other flags).
-- [ ] Let both runs complete; do not babysit continuously — poll via
-      `trackio list alerts --project turn-level-rewards --json --since <timestamp>` rather than
-      watching stdout the whole time. Also watch the new periodic `eval_reward` curve (from the
-      task above) for a plateau or divergence from the training reward curve — that's the
-      overfitting/convergence signal this phase specifically adds.
-- [ ] Save both final checkpoints to `outputs/{condition}/` (already the default `output_dir` per
-      `build_config` — confirm the checkpoint actually lands there and is loadable, don't just
-      assume the default path was honored).
+- [x] **Add `num_iterations=2` and `save_strategy`/`save_steps`/`save_total_limit` to
+      `build_config`** — done, but **periodic in-training eval was deliberately dropped**, a real
+      deviation from this doc's original plan: `GRPOTrainer`'s `environments` pool (required by
+      `SearchEnv`) is built once at init, sized to train's `generation_batch_size`, and reused
+      unconditionally for both train and eval in the installed `trl==1.7.1` — a differently-sized
+      eval batch raises a `ValueError`, and matching eval's batch to train's reproduces the exact
+      OOM this phase's micro-batching fix exists to solve, with no eval-side chunking knob
+      available. This is already fixed upstream (TRL PR #6001, commit `8b61980d`) but not in any
+      released version — see CLAUDE.md's "TRL mechanics" section for the full writeup and the
+      revisit condition. Phase 6's `evaluate.py` is the only held-out signal now.
+- [x] **Add `log_metric` calls to `rewards.py`'s reward functions** — done as originally planned;
+      `exact_match`/`f1`/`format_compliance_rate`/`retrieval_fraction` all land in trackio as clean
+      per-step curves.
+- [x] Launch the `outcome_only` full run, verify healthy, launch `turn_level` — done, but **not on
+      the first or second attempt**. See Handoff notes below for two real bugs the live runs
+      surfaced (an OOM that survived the original micro-batching fix, and a silent policy collapse
+      from a follow-on batching bug) plus an unrelated infrastructure issue (a transient systemd
+      cgroup killing the training process independent of anything training-related).
+- [x] Let both runs complete, checkpoints saved to `outputs/{condition}/` and confirmed loadable.
 
 ## Exit criteria (all must be true before handing off)
 
-- [ ] Both runs completed all planned steps (300) without crashing.
-- [ ] No unresolved trackio alerts from either run (any that fired were investigated and are
-      understood — e.g. an expected early-training dip vs. a genuine problem).
-- [ ] Both checkpoints saved and loadable.
-- [ ] Full reward/metric curves for both runs are visible in the shared trackio project, including
-      the new periodic eval-reward curve and the new per-metric (`exact_match`/`f1`/
-      `retrieval_fraction`/`format_compliance_rate`) curves from this phase's two code tasks.
+- [x] Both runs completed all planned steps (300) without crashing.
+- [x] No unresolved trackio alerts from either run.
+- [x] Both checkpoints saved and loadable (`outputs/outcome_only/checkpoint-300`,
+      `outputs/turn_level/checkpoint-300`; confirmed via `AutoModelForCausalLM.from_pretrained`).
+- [x] Full reward/metric curves for both runs are visible in trackio (150 points each for
+      `reward`/`exact_match`/`f1`/`format_compliance_rate`, plus `retrieval_fraction` for
+      `turn_level`). **No periodic eval-reward curve** — dropped, see Tasks above.
 
 ## Handoff notes
 
-<!-- Fill in after completing this phase: actual step counts / wall-clock time for each run
-(compare against Phase 4's ~7-9s/step-at-num_generations=2 figure to see how generation cost
-scaled with group size), any alerts that fired and what they meant, whether gradient_checkpointing
-alone was sufficient to avoid OOM at num_generations=21 or the fused kernels needed installing
-after all, checkpoint paths, the periodic eval-reward curve's shape (did it plateau, diverge from
-train reward, or track it closely?), and anything unusual observed in the curves that Phase 6
-should investigate specifically (e.g. did turn_level's retrieval_fraction plateau near the ~80%
-corpus ceiling documented in CLAUDE.md, or somewhere else?). Leave this section for the next fresh
-agent to read first. -->
+**Config as actually run** (differs from this doc's original plan in two ways, both load-bearing):
+- `--max-steps 300 --num-generations 21 --eval-size 64 --train-size 90447` for both conditions —
+  the launch flags matched the plan, but `build_config` internally sets
+  `per_device_train_batch_size=1` (not `21`) and `gradient_accumulation_steps=21`, not the
+  `per_device_train_batch_size=num_generations=21` this doc originally assumed. See the two bugs
+  below for why.
+- **150 distinct training prompts, not 300**: `num_iterations=2` means each sampled prompt's
+  rollout group is reused for 2 real optimizer steps (confirmed directly: trackio's logged
+  `train/global_step` for reward-bearing entries advances by exactly 2 per prompt — 1, 3, 5, 7,
+  ...). 300 total steps ÷ 2 = 150 distinct prompts. **This doc's original claim that "each step
+  samples exactly one unique prompt" was imprecise** — it didn't account for `num_iterations`'
+  reuse. Whether this matches the paper is genuinely unresolved: refetched arXiv:2505.11821
+  Appendix E.3 directly, and while it states both "total training steps is set to 300" and "each
+  batch undergoes two training iterations," **it never clarifies whether the 300 already includes
+  the 2-iteration reuse or not** — the two sentences appear with no stated relationship. This
+  repo's 150-distinct-prompts/300-total-steps reading follows the standard ML convention (a "step"
+  = one gradient update, matching TRL's own `global_step`), which is principled but not a verified
+  1:1 match — a genuine interpretive call given real ambiguity in the source text, not a slip.
 
-(not yet started)
+**Bug #1 (OOM) — real canary run, `num_generations=21`, `per_device_train_batch_size=21` (no
+chunking)**: TRL's `_get_per_token_logps_and_entropies` tried to allocate 28.29 GiB for one
+logits-to-fp32 conversion, OOMing the 24GB GPU. A chunk size of 3 (`per_device_train_batch_size=3`)
+still OOMed on the backward pass with a smaller shortfall (confirmed not a fragmentation artifact —
+`PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` made no difference). Fixed by capping
+`per_device_train_batch_size` at 1 (fully sequential, single-sequence chunks) — see
+`_MAX_TRAIN_MICRO_BATCH_SIZE`/`_train_micro_batch_size` in `train.py`.
+
+**Bug #2 (silent policy collapse) — a real 6300-step run** (launched at that scale before Bug #1's
+fix above was itself buggy) **collapsed into a fixed, zero-variance `-0.1` reward
+(`frac_reward_zero_std=1.0`) for 20+ consecutive rollout groups**, starting right after the 8th
+group. Root cause, confirmed via direct sqlite query of the run's own metrics and the logged
+completions transcript (garbled, malformed tool-call syntax, identical across all 21 samples):
+the OOM fix made up the difference from capping `per_device_train_batch_size` via
+`steps_per_generation=21` directly, leaving `gradient_accumulation_steps` at its default of `1`.
+TRL's own docstring says `steps_per_generation` "defaults to `gradient_accumulation_steps`" when
+unset — the intended lever is `gradient_accumulation_steps`. With it left at 1, each of the 21 (×2
+for `num_iterations`) memory-safe micro-batches triggered its own independent optimizer step
+instead of being combined into one properly-averaged update per rollout group — noisy
+single-sequence updates instead of stable group-averaged ones. Fixed by setting
+`gradient_accumulation_steps` instead and leaving `steps_per_generation` unset so it defaults to
+match. Verified via a fresh 500-step run showing real reward variance well past the point where the
+old run had collapsed, before committing to the real full runs.
+
+**Infrastructure issue (unrelated to training code)**: two consecutive `outcome_only` launches were
+killed externally at nearly identical elapsed time (~25-32 min), regardless of training progress —
+no CUDA OOM, no traceback, system RAM/disk fine. Traced to the interactive session running inside
+`app-ghostty-surface-transient-*.scope`, a systemd scope tied to the terminal window's lifecycle,
+which was getting reaped and killing everything in its cgroup. Fixed by launching training via
+`systemd-run --user --scope --unit=<name> -- <command>`, placing it in an independent,
+non-transient scope. Confirmed via `cat /proc/<pid>/cgroup` and by the process surviving well past
+the previous kill point. Relevant for any future long (>~25 min) background process in this
+environment, not specific to this repo's code.
+
+**Actual wall-clock**: `outcome_only` — 300/300 steps in 1h26m46s (~17.4s/step average).
+`turn_level` — 300/300 steps in 1h40m16s (~20.1s/step average, slower likely due to the extra
+`turn_reward`/retrieval-server round trip per rollout). Both notably slower than Phase 4's
+2-generation smoke test (~6-9s/step) but far faster than the (incorrect) ~4.5-5 hour/condition
+estimate computed before Bug #2's fix was found — that estimate was itself based on the same wrong
+steps-per-generation mental model as Bug #2.
+
+**Results** (training-batch metrics, first-third vs. last-third of each run's 150 logged points —
+not a held-out evaluation; that's Phase 6's job):
+
+| Metric | outcome_only (first → last third) | turn_level (first → last third) |
+|---|---|---|
+| exact_match | 0.170 → 0.224 | 0.213 → 0.233 |
+| F1 | 0.245 → 0.311 | 0.296 → 0.340 |
+| format_compliance_rate | 0.949 → 0.996 | 0.882 → 0.990 |
+| retrieval_fraction | n/a | 0.414 → 0.314 |
+
+Both conditions show real learning (EM/F1 trending up). `turn_level` starts and ends with somewhat
+higher EM/F1 than `outcome_only`, directionally consistent with the paper's hypothesis, but with
+only 150 training prompts each this is a small-scale training-batch signal, not a rigorous claim —
+Phase 6's full 7,405-row held-out evaluation is the real test. **Flag for Phase 6**:
+`turn_level`'s `retrieval_fraction` trended *down* (0.41 → 0.31) rather than up over training —
+worth checking directly in the held-out evaluation rather than assuming it's noise.
+
+**No periodic eval-reward curve** (dropped — see Tasks above), so no plateau/divergence signal to
+report here; Phase 6's held-out `evaluate.py` run is the first real generalization check.
