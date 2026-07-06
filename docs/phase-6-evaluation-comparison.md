@@ -118,11 +118,51 @@ either the batch size or the total wall-clock, measure them.
       paper, is there a plausible reason already documented in CLAUDE.md or Phase 5's Handoff notes
       (the ~80% retrieval ceiling, the much smaller model/training scale, the genuine ambiguity in
       whether 150 distinct training prompts matches the paper's own scale)?
+- [ ] Work through the "Decision: is more training needed?" section below against the actual
+      numbers just produced, and record the outcome (triggered or not, and why) in this doc's
+      Handoff notes — this is part of validating the comparison, not a separate follow-up step.
+
+## Decision: is more training needed? (part of this phase's validation, not a separate follow-up)
+
+After computing the held-out comparison, explicitly check these four criteria before declaring
+Phase 6 done. This repro has exactly **one training seed per condition** — no repeated runs to
+average over — so a real risk is reporting a difference that's actually just noise, or missing a
+real one buried in a small-sample artifact. If any of these trigger, more training is genuinely
+warranted, not optional polish:
+
+1. **The held-out EM/F1 gap between conditions is small relative to single-run noise.** Rough
+   check: compare the gap to the swing already visible within each run's own training curve (e.g.
+   `train/exact_match`'s own point-to-point variance in trackio, already queried this way in
+   Phase 5). If the between-condition gap is smaller than the within-run noise, don't report it as
+   a finding as-is — **re-run both conditions with a different `--seed`** (same `--max-steps 300`,
+   ~1.5-2hr each per Phase 5's actual wall-clock) and check whether the direction replicates.
+2. **Held-out results contradict the training-batch trend Phase 5 documented** (e.g. `outcome_only`
+   ends up ahead on held-out data despite `turn_level` looking ahead during training). This points
+   at overfitting/small-sample instability, not just noise — the fix is **more distinct training
+   prompts**, not a different seed. `distinct_prompts = max_steps / num_iterations` = `max_steps /
+   2` at this repo's config, so e.g. `--max-steps 600` doubles training to 300 distinct prompts per
+   condition.
+3. **Neither condition reproduces the paper's tool-call-frequency mechanism** (`outcome_only`'s
+   `train/tools/call_frequency` staying flat rather than declining the way the paper describes).
+   150 distinct prompts may just be too short a run for that dynamic to emerge — before concluding
+   it's a fundamental mismatch with the paper, try **extending `outcome_only` specifically** (it's
+   the one condition the claim is about) to more steps and re-check the trend, rather than assuming
+   the claim doesn't transfer.
+4. **`turn_level`'s held-out `retrieval_fraction` continues the downward trend Phase 5 flagged**
+   (0.41 → 0.31 during training) rather than stabilizing. If confirmed still falling at the end of
+   training, more steps would show whether it's a real, ongoing problem with `turn_reward`'s
+   shaping (worth investigating directly) or just early-training noise settling into a stable,
+   lower value (not actually still declining).
+
+If none of these trigger, the current 150-distinct-prompt runs are sufficient to report a real,
+if modest-scale, finding — don't manufacture a reason to keep training past a clean result.
 
 ## Exit criteria (all must be true before handing off — this is the last phase)
 
 - [ ] Both checkpoints evaluated on the same fixed, full 7,405-row held-out set.
 - [ ] Comparison plots/tables produced and saved somewhere durable (not just a notebook cell).
+- [ ] The four more-training criteria above explicitly checked and recorded (triggered or not,
+      and why) — not skipped just because a comparison number exists.
 - [ ] A short written summary of findings exists, explicitly stating whether this simplified
       recreation reproduces the paper's core claim or not, and why — including the specific
       tool-call-frequency-decay mechanism check above, not just final EM/F1.
