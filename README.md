@@ -60,6 +60,18 @@ rather than assuming it's noise.
 - **LLM-as-judge reward** (an alternative to exact-match/F1 scoring, explored on top of the PPO
   comparison) — not yet started.
 
+## Project structure
+
+```
+data/       # downloaded wiki-18 retrieval corpus + BM25 index (gitignored, multi-GB)
+docs/       # phase docs, design specs, roadmap
+outputs/    # training checkpoints + logs per condition (gitignored)
+results/    # final held-out metrics + comparison plots (committed)
+scripts/    # retrieval server, one-off setup/verification, compare_runs.py
+src/        # the turn_level_rewards package (env, rewards, metrics, data, train, evaluate)
+tests/      # unit tests (fast, no GPU, no live retrieval server)
+```
+
 ## Reproducing this
 
 ### Prerequisites
