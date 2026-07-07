@@ -32,30 +32,45 @@ comparison (`PPO`/`MT-PPO`).
 
 ## Results
 
-The GRPO comparison (outcome-only vs. turn-level reward) has completed its first pair of training
-runs. Both conditions trained on the same number of steps and the same question pool; numbers
-below compare each run's early training performance to its late training performance:
+The GRPO comparison (outcome-only vs. turn-level reward) has completed both training runs and a
+full held-out evaluation (7,404 questions neither model trained on). Both conditions trained on
+the identical number of steps and question-sampling process; only the reward function differs.
 
-| Metric | Outcome reward (early → late) | Turn-level reward (early → late) |
+| Metric (held-out) | Outcome reward | Turn-level reward |
 |---|---|---|
-| Exact match | 0.17 → 0.22 | 0.21 → 0.23 |
-| F1 | 0.25 → 0.31 | 0.30 → 0.34 |
-| Well-formed answer rate | 0.95 → 1.00 | 0.88 → 0.99 |
-| Real passage surfaced during search | n/a | 0.41 → 0.31 |
+| Exact match | 0.236 | 0.207 |
+| F1 | 0.331 | 0.294 |
+| Well-formed answer rate | 0.994 | 0.974 |
+| Real passage surfaced during search | n/a | 0.381 |
 
-Both conditions show real learning — exact match and F1 both improve over training. Turn-level
-reward starts and ends somewhat ahead of outcome-only on both, directionally consistent with the
-paper's hypothesis that denser feedback helps. This is training-performance data, not a held-out
-evaluation, so it's a first signal rather than a rigorous claim — the real test (a full pass over
-thousands of held-out questions the model never trained on, plus comparison charts) is still
-ahead. One thing to watch there: turn-level reward's rate of surfacing a real supporting passage
-during search *dropped* over training rather than rising, worth checking against held-out data
-rather than assuming it's noise.
+See `results/` for the full comparison plots (training curves, held-out bars, and the search-tool
+call-frequency comparison referenced below).
+
+**Honest read: this comparison doesn't currently support a claim in either direction.** Both
+conditions show real learning (format compliance and EM/F1 both rose substantially from a
+near-zero start, and outcome-only's held-out numbers match/exceed its own late-training numbers,
+ruling out gross overfitting) — but three separate checks all point the same way:
+
+- Turn-level reward looked ahead during training (EM/F1 both higher than outcome-only's), but that
+  reverses on held-out data — outcome-only ends up ahead on both metrics instead.
+- The held-out gap between the two conditions, either direction, is smaller than the noise already
+  visible within a single condition's own training run.
+- The paper's specific claimed mechanism — that outcome-only reward causes the model to gradually
+  stop calling the search tool — didn't appear here. If anything, outcome-only's search-tool call
+  frequency *rose* over training instead of falling.
+
+At this scale (one training seed, 150 distinct training prompts per condition), that's the honest
+outcome: a real, useful negative-ish result rather than a confirmation or refutation of the
+paper's `GRPO-OR`/`GRPO-MR` finding. The recommended next step is a symmetric re-run — both
+conditions get the same larger step budget and a new seed, never one condition alone — before
+drawing a real conclusion; see `docs/phase-6-evaluation-comparison.md`'s Handoff notes for the
+full criteria checked and the reasoning.
 
 ## Roadmap
 
-- **GRPO: outcome-only vs. merged-reward** — training complete for both conditions; held-out
-  evaluation and comparison charts not yet built.
+- **GRPO: outcome-only vs. merged-reward** — training and held-out evaluation complete for both
+  conditions; comparison inconclusive at this scale (see Results above) — a symmetric re-run at a
+  larger step budget is recommended before drawing a conclusion.
 - **PPO: outcome-only vs. merged-reward** — design complete; not yet started.
 - **LLM-as-judge reward** (an alternative to exact-match/F1 scoring, explored on top of the PPO
   comparison) — not yet started.

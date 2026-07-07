@@ -171,18 +171,84 @@ both conditions always seeing the identical budget.
 
 ## Exit criteria (all must be true before handing off — this is the last phase)
 
-- [ ] Both checkpoints evaluated on the same fixed, full 7,405-row held-out set.
-- [ ] Comparison plots/tables produced and saved somewhere durable (not just a notebook cell).
-- [ ] The four more-training criteria above explicitly checked and recorded (triggered or not,
-      and why) — not skipped just because a comparison number exists.
-- [ ] A short written summary of findings exists, explicitly stating whether this simplified
-      recreation reproduces the paper's core claim or not, and why — including the specific
-      tool-call-frequency-decay mechanism check above, not just final EM/F1.
+- [x] Both checkpoints evaluated on the same fixed, full 7,404-row held-out set (7,404, not 7,405
+      — see Handoff notes for why 1 row was deliberately dropped).
+- [x] Comparison plots/tables produced and saved in `results/` (git-committed, per this session's
+      design decision — see the design spec).
+- [x] The four more-training criteria explicitly checked and recorded below.
+- [x] A short written summary of findings exists below.
 
 ## Handoff notes
 
-<!-- This is the final phase — record final results and any recommended follow-up experiments
-here (e.g. scaling up train size/steps, trying the closed-corpus or pooled-BM25 alternatives from
-CLAUDE.md's rejected-options table as a fidelity check, tuning turn_reward's magnitude). -->
+**Held-out evaluation setup, real numbers not assumed:**
+- Both conditions' `checkpoint-300` evaluated over the full held-out set via `evaluate.py`
+  (`--eval-batch-size 4`, chosen after real canary testing — see below).
+- `--eval-size 7404`, not the full 7,405: a ragged final batch (7,405 isn't evenly divisible by
+  the 2 unique prompts/batch that `--eval-batch-size 4` implies at `num_generations=2`) reproduces
+  the exact `ValueError: zip() argument 2 is longer than argument 1` CLAUDE.md's TRL mechanics
+  section already documents for a mismatched environments-pool size — confirmed directly with a
+  real 201-row canary. Dropping 1 of 7,405 rows sidesteps it entirely; statistically inconsequential.
+- `--eval-batch-size 8` was tried first and OOMed *stochastically* on a 33-row canary (crashed on
+  step 6 of 9, having succeeded cleanly on an earlier 32-row canary) — unlike training's
+  same-prompt rollout groups, held-out batches mix genuinely different questions with much more
+  completion-length variance, so 8 isn't reliably safe even though it worked once. `4` held up
+  cleanly across a 200-row canary before being used for the real run.
+- Wall-clock: `outcome_only` 2h35m (3,702 steps), `turn_level` 4h00m (slower — extra
+  retrieval-server round trip per completion, consistent with Phase 5's training-time observation).
+- **Real, confirmed via each checkpoint's own `trainer_state.json`** (not trackio's own returned
+  `step` field, which is trackio's internal logging-call counter and does NOT match the trainer's
+  real `global_step` — a real discrepancy found and resolved in this session): both conditions'
+  checkpoints have `global_step=300`, `max_steps=300`, exactly 300 log entries — Phase 5's
+  "150 distinct prompts, 300 real optimizer steps" claim is confirmed correct at the ground-truth
+  level, not just assumed.
 
-(not yet started)
+**Held-out results:**
+
+| Metric | outcome_only | turn_level |
+|---|---|---|
+| Exact match | 0.2355 | 0.2068 |
+| F1 | 0.3313 | 0.2943 |
+| Format compliance | 0.9944 | 0.9743 |
+| Retrieval fraction | n/a | 0.3812 |
+
+**The four criteria, checked against real numbers:**
+
+1. **Gap vs. single-run noise — TRIGGERS.** The held-out EM gap (0.029) and F1 gap (0.037) are
+   both smaller than the swing already visible within a single run's own training curve — even at
+   a smoothed first/mid/last-third granularity, `outcome_only`'s own EM ranges from 0.170 to 0.243
+   across its own training (a 0.07 swing), larger than the whole between-condition gap. Visually
+   confirmed too: `results/em_f1_training_curves.png`'s raw per-prompt curves for both conditions
+   are effectively interleaved noise, not visibly separated lines.
+2. **Held-out contradicts training-batch trend — TRIGGERS.** Phase 5's training-batch data showed
+   `turn_level` ahead on both EM (0.233 vs 0.224 late-training) and F1 (0.340 vs 0.311). Held-out
+   data reverses this: `outcome_only` ahead on both (0.2355 vs 0.2068 EM; 0.3313 vs 0.2943 F1) —
+   the exact contradiction this criterion anticipated, not a near-miss.
+3. **`outcome_only`'s tool-call-frequency mechanism — TRIGGERS, independent of `turn_level`.**
+   The paper claims `GRPO-OR` "gradually stops calling search tools." `outcome_only`'s own
+   training curve (binned first/mid/last third of its 150 logged points) shows the opposite:
+   0.768 → 1.010 → 1.148 mean tool calls/completion — rising, not falling. See
+   `results/tool_call_frequency.png`.
+4. **`turn_level`'s retrieval_fraction continuing to decline — does NOT clearly trigger.** Training
+   showed a real decline (0.414 first-third → 0.314 last-third). But the held-out value (0.3812)
+   sits *between* those two training-time numbers, closer to the early-training value than the
+   late-training one — not a continuation of the decline. Read as the training-time dip settling
+   rather than an ongoing, worsening problem, though a single held-out number isn't itself a trend.
+
+**Verdict: 3 of 4 criteria trigger. More training is genuinely warranted before treating either
+direction as a real finding** — this is not a borderline call. Per this doc's corrected
+recommendation (see "Decision" section above, fixed in this session after review to never treat
+conditions asymmetrically): the follow-up is **one symmetric re-run of both conditions**, same
+larger `--max-steps` (e.g. `600`, doubling to 300 distinct prompts each — addresses criteria 2–4)
+**and** a different `--seed` (addresses criterion 1), not a patchwork of condition-specific fixes.
+This has NOT been launched — it's a real multi-hour GPU-time decision left to the user.
+
+**Honest summary of what this simplified recreation does and doesn't show:** real learning
+happened in both conditions (format compliance and EM/F1 both improved substantially from a
+near-zero start, and `outcome_only`'s held-out numbers matching/exceeding its own late-training
+numbers rules out gross overfitting). But at this scale (one seed, 150 distinct training prompts
+per condition), **this run does not reproduce the paper's `GRPO-OR`/`GRPO-MR` comparison** in
+either direction: `turn_level`'s training-time lead reverses on held-out data, the gap either way
+is smaller than single-run noise, and the paper's own claimed mechanism for why outcome-only
+reward underperforms (declining search behavior) didn't appear — if anything it moved the wrong
+way. This is a real, useful negative-ish result (a small-scale, single-seed ablation isn't enough
+to settle this question) rather than a confirmation or refutation of the paper's claim.
