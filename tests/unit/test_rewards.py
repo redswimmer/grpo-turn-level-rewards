@@ -2,6 +2,7 @@ import pytest
 from turn_level_rewards.rewards import (
     format_reward,
     get_reward_funcs,
+    length_penalty,
     outcome_reward,
     turn_reward,
 )
@@ -172,3 +173,65 @@ def test_turn_reward_logs_unscaled_retrieval_fraction():
         ("retrieval_fraction", 1.0),
         ("retrieval_fraction", 0.5),
     ]
+
+
+def test_length_penalty_zero_below_target():
+    completions = [[{"role": "assistant", "content": "x" * 100}]]
+
+    assert length_penalty(completions=completions) == pytest.approx([0.0])
+
+
+def test_length_penalty_scales_linearly_above_target():
+    # target=2000, excess=1000 -> half of one target-width -> -0.2 * 0.5 = -0.1
+    completions = [[{"role": "assistant", "content": "x" * 3000}]]
+
+    assert length_penalty(completions=completions) == pytest.approx([-0.1])
+
+
+def test_length_penalty_caps_at_max_magnitude():
+    # excess=4000 -> 2x target-width, but capped at -0.2
+    completions = [[{"role": "assistant", "content": "x" * 6000}]]
+
+    assert length_penalty(completions=completions) == pytest.approx([-0.2])
+
+
+def test_length_penalty_sums_across_multiple_assistant_turns():
+    completions = [
+        [
+            _search_tool_call("query"),  # assistant, content="" -- contributes 0
+            _tool_response("y" * 10000),  # tool response -- must NOT count toward the penalty
+            {"role": "assistant", "content": "x" * 2500},  # final answer turn
+        ]
+    ]
+
+    # total assistant content = 0 + 2500 = 2500, excess = 500 -> -0.2 * (500/2000) = -0.05
+    assert length_penalty(completions=completions) == pytest.approx([-0.05])
+
+
+def test_length_penalty_logs_completion_length():
+    log_metric = _FakeLogMetric()
+    completions = [[{"role": "assistant", "content": "x" * 500}]]
+
+    length_penalty(completions=completions, log_metric=log_metric)
+
+    assert log_metric.calls == [("completion_length", 500.0)]
+
+
+def test_get_reward_funcs_penalize_length_appends_length_penalty_for_outcome_only():
+    funcs = get_reward_funcs("outcome_only", penalize_length=True)
+    assert [f.__name__ for f in funcs] == ["format_reward", "outcome_reward", "length_penalty"]
+
+
+def test_get_reward_funcs_penalize_length_appends_length_penalty_for_turn_level():
+    funcs = get_reward_funcs("turn_level", penalize_length=True)
+    assert [f.__name__ for f in funcs] == [
+        "format_reward",
+        "outcome_reward",
+        "turn_reward",
+        "length_penalty",
+    ]
+
+
+def test_get_reward_funcs_penalize_length_defaults_to_false():
+    funcs = get_reward_funcs("outcome_only")
+    assert [f.__name__ for f in funcs] == ["format_reward", "outcome_reward"]

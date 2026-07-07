@@ -200,6 +200,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--eval-size", type=int, default=8)
     parser.add_argument("--max-steps", type=int, default=2)
     parser.add_argument("--num-generations", type=int, default=2)
+    parser.add_argument("--penalize-length", action="store_true")
     return parser.parse_args(argv)
 
 
@@ -208,6 +209,7 @@ def build_trainer(
     train_size: int | None,
     eval_size: int | None,
     config: GRPOConfig,
+    penalize_length: bool = False,
 ) -> GRPOTrainer:
     """Composition root: real model, real SearchEnv (hits the live retrieval server), real data.
 
@@ -215,7 +217,7 @@ def build_trainer(
     """
     return GRPOTrainer(
         model="Qwen/Qwen3.5-0.8B",
-        reward_funcs=get_reward_funcs(condition),
+        reward_funcs=get_reward_funcs(condition, penalize_length=penalize_length),
         args=config,
         train_dataset=data.load_train_dataset(n=train_size, seed=config.seed),
         eval_dataset=data.load_eval_dataset(n=eval_size, seed=config.seed),
@@ -242,10 +244,14 @@ def main() -> None:
     # same --condition silently share one trackio run record: a real full run at num_generations=21
     # found its own reward/exact_match/f1 curve interleaved with every earlier debug invocation's
     # data under the same run name, with no way to cleanly separate them after the fact.
+    length_suffix = "-lengthpenalized" if args.penalize_length else ""
     config.run_name = (
-        f"{args.condition}-{args.max_steps}steps-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+        f"{args.condition}-{args.max_steps}steps{length_suffix}-"
+        f"{datetime.now().strftime('%Y%m%d-%H%M%S')}"
     )
-    trainer = build_trainer(args.condition, args.train_size, args.eval_size, config)
+    trainer = build_trainer(
+        args.condition, args.train_size, args.eval_size, config, args.penalize_length
+    )
     trainer.train()
 
 

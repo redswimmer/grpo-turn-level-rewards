@@ -213,6 +213,7 @@ def test_parse_args_defaults():
     assert args.eval_size == 8
     assert args.max_steps == 2
     assert args.num_generations == 2
+    assert args.penalize_length is False
 
 
 def test_parse_args_condition_required():
@@ -249,3 +250,9 @@ def test_parse_args_overrides():
     assert args.eval_size == 200
     assert args.max_steps == 500
     assert args.num_generations == 8
+
+
+def test_parse_args_penalize_length_flag():
+    args = _parse_args(["--condition", "outcome_only", "--penalize-length"])
+
+    assert args.penalize_length is True

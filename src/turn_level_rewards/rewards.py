@@ -98,10 +98,63 @@ def turn_reward(
     return rewards
 
 
-def get_reward_funcs(condition: Literal["outcome_only", "turn_level"]) -> list[Any]:
-    """Return the reward function list for a training condition (CLAUDE.md's Reward design)."""
+_LENGTH_PENALTY_CAP = 0.2
+_LENGTH_PENALTY_TARGET_CHARS = 2000
+
+
+def _generated_length(completion: Completion) -> int:
+    """Total character length of the model's own generated text (assistant messages only).
+
+    Excludes tool-response content deliberately -- that text is injected by the environment
+    (retrieved documents), not written by the model, so it shouldn't count against it.
+    """
+    return sum(
+        len(str(message.get("content") or ""))
+        for message in completion
+        if message.get("role") == "assistant"
+    )
+
+
+def length_penalty(
+    completions: list[Completion], log_metric: LogMetric = _noop_log_metric, **kwargs: Any
+) -> list[float]:
+    """Small penalty for generated text beyond a target length.
+
+    Added to counter a real, measured drift: Phase 6's symmetric re-run showed completion length
+    roughly doubling over training in both conditions, decoupled from correctness (same-length
+    rollout groups scored anywhere from 0 to max reward) -- see
+    docs/phase-6-evaluation-comparison.md's Handoff notes. Nothing in format_reward/outcome_reward
+    penalizes verbosity, so the drift is free under the existing reward; this adds the missing
+    pressure. No penalty below _LENGTH_PENALTY_TARGET_CHARS (matching the healthy early-training
+    baseline observed in that same run); scales linearly above it, capped at
+    -_LENGTH_PENALTY_CAP so it can never dominate outcome_reward (max 1.5) or turn_reward (max 0.4).
+    """
+    rewards = []
+    for completion in completions:
+        length = _generated_length(completion)
+        excess = max(0, length - _LENGTH_PENALTY_TARGET_CHARS)
+        penalty = -_LENGTH_PENALTY_CAP * min(1.0, excess / _LENGTH_PENALTY_TARGET_CHARS)
+        rewards.append(penalty)
+        log_metric("completion_length", float(length))
+    return rewards
+
+
+def get_reward_funcs(
+    condition: Literal["outcome_only", "turn_level"], penalize_length: bool = False
+) -> list[Any]:
+    """Return the reward function list for a training condition (CLAUDE.md's Reward design).
+
+    penalize_length is an orthogonal toggle (not a new condition value) so it composes with
+    either condition without duplicating the outcome_only/turn_level branch -- see
+    docs/phase-6-evaluation-comparison.md's Handoff notes for why length_penalty was added and
+    why it's tested against both conditions rather than just one.
+    """
     if condition == "outcome_only":
-        return [format_reward, outcome_reward]
-    if condition == "turn_level":
-        return [format_reward, outcome_reward, turn_reward]
-    raise ValueError(f"Unknown condition: {condition!r}")
+        funcs = [format_reward, outcome_reward]
+    elif condition == "turn_level":
+        funcs = [format_reward, outcome_reward, turn_reward]
+    else:
+        raise ValueError(f"Unknown condition: {condition!r}")
+    if penalize_length:
+        funcs.append(length_penalty)
+    return funcs
