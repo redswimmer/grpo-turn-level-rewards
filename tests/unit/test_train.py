@@ -256,3 +256,15 @@ def test_parse_args_penalize_length_flag():
     args = _parse_args(["--condition", "outcome_only", "--penalize-length"])
 
     assert args.penalize_length is True
+
+
+def test_parse_args_paper_search_penalty_flag():
+    args = _parse_args(["--condition", "outcome_only", "--paper-search-penalty"])
+
+    assert args.paper_search_penalty is True
+
+
+def test_parse_args_paper_search_penalty_defaults_to_false():
+    args = _parse_args(["--condition", "outcome_only"])
+
+    assert args.paper_search_penalty is False

@@ -4,6 +4,7 @@ from turn_level_rewards.rewards import (
     get_reward_funcs,
     length_penalty,
     outcome_reward,
+    search_count_penalty,
     turn_reward,
 )
 
@@ -235,3 +236,79 @@ def test_get_reward_funcs_penalize_length_appends_length_penalty_for_turn_level(
 def test_get_reward_funcs_penalize_length_defaults_to_false():
     funcs = get_reward_funcs("outcome_only")
     assert [f.__name__ for f in funcs] == ["format_reward", "outcome_reward"]
+
+
+def test_search_count_penalty_zero_calls():
+    completions = [[_answer("127 Hours")]]  # no tool calls at all
+
+    assert search_count_penalty(completions=completions) == pytest.approx([0.0])
+
+
+def test_search_count_penalty_scales_with_call_count():
+    completions = [
+        [
+            _search_tool_call("query 1"),
+            _tool_response("doc"),
+            _search_tool_call("query 2"),
+            _tool_response("doc"),
+            _answer("127 Hours"),
+        ]
+    ]
+
+    # 2 search calls * -0.1 (paper's lambda_s for MT-PPO's search-count penalty, Section 5.2/6.1 --
+    # borrowed here since the paper's own GRPO case study has no equivalent term)
+    assert search_count_penalty(completions=completions) == pytest.approx([-0.2])
+
+
+def test_search_count_penalty_ignores_non_search_tool_calls():
+    other_tool_call = {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [{"type": "function", "function": {"name": "not_search", "arguments": {}}}],
+    }
+    completions = [[other_tool_call, _answer("127 Hours")]]
+
+    assert search_count_penalty(completions=completions) == pytest.approx([0.0])
+
+
+def test_search_count_penalty_logs_search_call_count():
+    log_metric = _FakeLogMetric()
+    completions = [[_search_tool_call("q"), _tool_response("doc"), _answer("127 Hours")]]
+
+    search_count_penalty(completions=completions, log_metric=log_metric)
+
+    assert log_metric.calls == [("search_call_count", 1.0)]
+
+
+def test_get_reward_funcs_penalize_search_count_appends_for_outcome_only():
+    funcs = get_reward_funcs("outcome_only", penalize_search_count=True)
+    assert [f.__name__ for f in funcs] == [
+        "format_reward",
+        "outcome_reward",
+        "search_count_penalty",
+    ]
+
+
+def test_get_reward_funcs_penalize_search_count_appends_for_turn_level():
+    funcs = get_reward_funcs("turn_level", penalize_search_count=True)
+    assert [f.__name__ for f in funcs] == [
+        "format_reward",
+        "outcome_reward",
+        "turn_reward",
+        "search_count_penalty",
+    ]
+
+
+def test_get_reward_funcs_penalize_search_count_defaults_to_false():
+    funcs = get_reward_funcs("outcome_only")
+    assert "search_count_penalty" not in [f.__name__ for f in funcs]
+
+
+def test_get_reward_funcs_both_penalties_composable():
+    funcs = get_reward_funcs("outcome_only", penalize_length=True, penalize_search_count=True)
+    assert [f.__name__ for f in funcs] == [
+        "format_reward",
+        "outcome_reward",
+        "length_penalty",
+        "search_count_penalty",
+    ]

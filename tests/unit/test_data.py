@@ -60,6 +60,17 @@ def test_format_train_row_drops_original_prompt_and_source_columns():
     assert set(row.keys()) == {"prompt", "question", "golden_answers", "metadata"}
 
 
+def test_format_train_row_search_cap_disabled_drops_the_instruction():
+    row = _format_train_row(TRAIN_ROW, search_cap_in_prompt=False)
+
+    system_content = row["prompt"][0]["content"]
+    assert "at most 2 searches" not in system_content
+    assert "rely on your own knowledge rather than searching repeatedly" not in system_content
+    # the rest of the system prompt's guidance must still be intact
+    assert "search" in system_content
+    assert "<answer>" in system_content
+
+
 def test_format_eval_row_wraps_answer_into_golden_answers_list():
     row = _format_eval_row(EVAL_ROW)
 
@@ -211,3 +222,15 @@ def test_load_train_and_eval_datasets_have_identical_column_contract():
 
     assert set(train_ds.column_names) == set(eval_ds.column_names)
     assert set(train_ds[0]["metadata"].keys()) == set(eval_ds[0]["metadata"].keys())
+
+
+def test_load_train_dataset_threads_search_cap_flag_to_the_prompt():
+    ds = load_train_dataset(1, load_dataset_fn=_fake_loader(TRAIN_ROWS), search_cap_in_prompt=False)
+
+    assert "at most 2 searches" not in ds[0]["prompt"][0]["content"]
+
+
+def test_load_eval_dataset_threads_search_cap_flag_to_the_prompt():
+    ds = load_eval_dataset(1, load_dataset_fn=_fake_loader(EVAL_ROWS), search_cap_in_prompt=False)
+
+    assert "at most 2 searches" not in ds[0]["prompt"][0]["content"]

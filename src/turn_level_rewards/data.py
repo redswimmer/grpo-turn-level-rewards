@@ -19,31 +19,52 @@ _SYSTEM_PROMPT = (
     "aren't helpful, rely on your own knowledge rather than searching repeatedly."
 )
 
+_SYSTEM_PROMPT_NO_SEARCH_CAP = (
+    "You are a research assistant that answers questions by searching Wikipedia when needed.\n\n"
+    "You have access to a `search` tool that looks up Wikipedia passages for a query. Reason "
+    "about what you need to find out, and call `search` with a focused query if you need more "
+    "information. Read the results and reason further before deciding whether you need another "
+    "search. Once you are confident in the answer, give it wrapped in <answer>...</answer> tags "
+    "(e.g. <answer>Paris</answer>) and nothing else."
+)
 
-def _build_prompt(question: str) -> list[dict[str, str]]:
-    """Build the system+user prompt that teaches native tool-calling for a question."""
+
+def _build_prompt(question: str, search_cap_in_prompt: bool = True) -> list[dict[str, str]]:
+    """Build the system+user prompt that teaches native tool-calling for a question.
+
+    search_cap_in_prompt=False drops the "(at most 2 searches)" instruction and the "rely on
+    your own knowledge rather than searching repeatedly" hint -- used for the
+    search_count_penalty experiment, which replaces this prompt-engineered guidance with a
+    reward-shaped one (rewards.py's search_count_penalty). See
+    docs/phase-6-evaluation-comparison.md's Handoff notes for why.
+    """
+    system_prompt = _SYSTEM_PROMPT if search_cap_in_prompt else _SYSTEM_PROMPT_NO_SEARCH_CAP
     return [
-        {"role": "system", "content": _SYSTEM_PROMPT},
+        {"role": "system", "content": system_prompt},
         {"role": "user", "content": question},
     ]
 
 
-def _row_with_prompt(question: str, golden_answers: list[str], metadata: dict) -> dict:
+def _row_with_prompt(
+    question: str, golden_answers: list[str], metadata: dict, search_cap_in_prompt: bool = True
+) -> dict:
     """Assemble the shared output row shape used by both loaders."""
     return {
-        "prompt": _build_prompt(question),
+        "prompt": _build_prompt(question, search_cap_in_prompt),
         "question": question,
         "golden_answers": golden_answers,
         "metadata": metadata,
     }
 
 
-def _format_train_row(row: dict) -> dict:
+def _format_train_row(row: dict, search_cap_in_prompt: bool = True) -> dict:
     """Reshape a PeterJinGo/nq_hotpotqa_train row -- golden_answers/metadata already match."""
-    return _row_with_prompt(row["question"], row["golden_answers"], row["metadata"])
+    return _row_with_prompt(
+        row["question"], row["golden_answers"], row["metadata"], search_cap_in_prompt
+    )
 
 
-def _format_eval_row(row: dict) -> dict:
+def _format_eval_row(row: dict, search_cap_in_prompt: bool = True) -> dict:
     """Reshape a hotpotqa/hotpot_qa row -- wraps answer, nests 4 top-level fields under metadata."""
     metadata = {
         "type": row["type"],
@@ -51,7 +72,7 @@ def _format_eval_row(row: dict) -> dict:
         "supporting_facts": row["supporting_facts"],
         "context": row["context"],
     }
-    return _row_with_prompt(row["question"], [row["answer"]], metadata)
+    return _row_with_prompt(row["question"], [row["answer"]], metadata, search_cap_in_prompt)
 
 
 def load_train_dataset(
@@ -59,6 +80,7 @@ def load_train_dataset(
     seed: int = 42,
     *,
     load_dataset_fn: Callable[..., Dataset] = datasets.load_dataset,
+    search_cap_in_prompt: bool = True,
 ) -> Dataset:
     """Load PeterJinGo/nq_hotpotqa_train, filtered to hotpotqa rows, reshaped to the shared contract.
 
@@ -67,6 +89,8 @@ def load_train_dataset(
         seed: Shuffle seed.
         load_dataset_fn: Injectable seam for the real datasets.load_dataset call -- tests pass a
             fake returning an in-memory Dataset.
+        search_cap_in_prompt: False drops the "(at most 2 searches)" prompt instruction -- see
+            _build_prompt's docstring.
 
     Note: `data_files` pins this to the repo's `train.parquet` explicitly. Without it,
     `datasets.load_dataset(..., split="train")` still runs `download_and_prepare()` over *every*
@@ -85,7 +109,9 @@ def load_train_dataset(
     ds = ds.shuffle(seed=seed)
     if n is not None:
         ds = ds.select(range(n))
-    return ds.map(_format_train_row, remove_columns=ds.column_names)
+    return ds.map(
+        lambda row: _format_train_row(row, search_cap_in_prompt), remove_columns=ds.column_names
+    )
 
 
 def load_eval_dataset(
@@ -93,6 +119,7 @@ def load_eval_dataset(
     seed: int = 42,
     *,
     load_dataset_fn: Callable[..., Dataset] = datasets.load_dataset,
+    search_cap_in_prompt: bool = True,
 ) -> Dataset:
     """Load hotpotqa/hotpot_qa (distractor, validation), reshaped to the shared contract.
 
@@ -101,9 +128,13 @@ def load_eval_dataset(
         seed: Shuffle seed.
         load_dataset_fn: Injectable seam for the real datasets.load_dataset call -- tests pass a
             fake returning an in-memory Dataset.
+        search_cap_in_prompt: False drops the "(at most 2 searches)" prompt instruction -- see
+            _build_prompt's docstring.
     """
     ds = load_dataset_fn("hotpotqa/hotpot_qa", "distractor", split="validation")
     ds = ds.shuffle(seed=seed)
     if n is not None:
         ds = ds.select(range(n))
-    return ds.map(_format_eval_row, remove_columns=ds.column_names)
+    return ds.map(
+        lambda row: _format_eval_row(row, search_cap_in_prompt), remove_columns=ds.column_names
+    )
