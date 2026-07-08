@@ -268,3 +268,15 @@ def test_parse_args_paper_search_penalty_defaults_to_false():
     args = _parse_args(["--condition", "outcome_only"])
 
     assert args.paper_search_penalty is False
+
+
+def test_parse_args_remove_search_cap_prompt_flag():
+    args = _parse_args(["--condition", "outcome_only", "--remove-search-cap-prompt"])
+
+    assert args.remove_search_cap_prompt is True
+
+
+def test_parse_args_remove_search_cap_prompt_defaults_to_false():
+    args = _parse_args(["--condition", "outcome_only"])
+
+    assert args.remove_search_cap_prompt is False
