@@ -374,3 +374,64 @@ with the paper's actual GRPO methodology.
 
 Results for both, once complete, will be recorded here as a further append — not yet run as of
 this note.
+
+---
+
+## `length_penalty` results: hypothesis falsified, and a real, severe failure mode found
+
+Both conditions retrained at the identical seed123/600steps baseline config, only
+`--penalize-length` added. Real, complete results — not projected:
+
+| Metric (held-out) | `outcome_only` baseline → `+length_penalty` | `turn_level` baseline → `+length_penalty` |
+|---|---|---|
+| Exact match | 0.2418 → **0.0901** | 0.3065 → **0.2538** |
+| F1 | 0.3432 → **0.1514** | 0.3994 → **0.3481** |
+| Tool-call frequency | 1.044 → **0.000** | n/a |
+| Retrieval fraction | n/a | 0.5279 → **0.4401** |
+| Mean completion length (tokens) | 386 → **12** | ~250-300 → **249** |
+
+**`outcome_only` fully collapsed — not just got shorter, lost the entire task.** Read directly
+from the training completions, not inferred from metrics alone:
+
+- Step 1: normal — real search queries, real reasoning (matches the un-penalized baseline's
+  behavior exactly).
+- Step ~150: collapsed to **literally echoing the question back as the answer**, identical across
+  the entire 21-sample rollout group (`<answer>Backflip is the second single by American
+  singer-actress Raven-Symoné from her third album, titled what?</answer>` — verbatim repetition
+  of the prompt).
+- Step ~600 (final): shifted to a *different* degenerate mode — immediate, zero-search, incoherent
+  guesses (`<answer>An Allnynum Show</answer>`, `<answer>Dre lust for food and novelty</answer>`).
+  Not even wrong-but-plausible guesses; genuinely incoherent text.
+- Training-time EM never recovered: 0.052 (first third) → 0.099 (last third), flat and near-zero
+  the entire run, vs. the un-penalized baseline's real 0.170→0.394 climb. Completion length kept
+  *shrinking* over training (153→36 chars first-to-last-third) rather than stabilizing.
+- Held-out confirms it's not a training-curve artifact: `eval_tools/call_frequency=0.0` — the
+  model stopped calling search *at all* on the full 7,404-row held-out set. This is total
+  capability loss, not increased efficiency.
+
+**`turn_level` stayed coherent throughout training** (spot-checked completions show genuine,
+relevant multi-hop search queries the whole way through, e.g. real reasoning about "Brita Horn"
+and "Charles XIII of Sweden") **but still lost real accuracy on held-out data** — EM -0.053, F1
+-0.051, retrieval_fraction -0.088 vs. its own un-penalized baseline. Not a collapse, but a real,
+measurable cost.
+
+**Verdict: the "verbosity was pure free-riding, suppress it for free" hypothesis is falsified for
+both conditions**, just at very different severities. This was one of three possible outcomes laid
+out before running the experiment (no cost / real cost / no effect), and the actual result — real
+cost for both, catastrophic for one — is the most informative of the three, not the hoped-for one.
+`outcome_only`'s collapse is the more urgent finding: this specific `length_penalty` design
+(target=2000 chars, hard cap at -0.2, no interaction with `beta`/KL regularization since that
+stays disabled per the paper) is not safe to use as calibrated, at least not for the
+`outcome_only` reward composition (2 reward terms: `format_reward` + `outcome_reward`) — plausibly
+because `turn_level`'s extra `turn_reward` term provides more signal diversity within each
+rollout group, making it harder for the whole group to collapse into an identical degenerate
+completion the way `outcome_only`'s narrower 2-term reward did. Not confirmed as the mechanism,
+just the most plausible hypothesis given the data — would need a dedicated ablation (e.g. adding
+a third, low-stakes reward term to `outcome_only` without `turn_reward`'s retrieval semantics) to
+actually test that causal claim, which is out of scope for this pass.
+
+**Practical takeaway for any future attempt at a length penalty in this repo**: this specific
+magnitude/target combination should not be reused as-is. A smaller cap, a softer (non-hard-cliff)
+penalty shape, or per-condition tuning would all be reasonable next things to try — none attempted
+here, this experiment's job was to test the hypothesis honestly, not to find a working
+configuration through additional tuning cycles.
