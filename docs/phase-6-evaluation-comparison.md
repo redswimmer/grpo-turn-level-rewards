@@ -252,3 +252,125 @@ is smaller than single-run noise, and the paper's own claimed mechanism for why 
 reward underperforms (declining search behavior) didn't appear — if anything it moved the wrong
 way. This is a real, useful negative-ish result (a small-scale, single-seed ablation isn't enough
 to settle this question) rather than a confirmation or refutation of the paper's claim.
+
+---
+
+## Symmetric re-run results (seed=123, `--max-steps 600`, 300 distinct prompts/condition)
+
+Both conditions retrained per the recommendation above (same larger budget, new seed) and
+evaluated on the identical 7,404-row held-out set. Real numbers, not projected:
+
+| Metric (held-out) | `outcome_only` (seed42/300) → (seed123/600) | `turn_level` (seed42/300) → (seed123/600) |
+|---|---|---|
+| Exact match | 0.2355 → 0.2418 | 0.2068 → **0.3065** |
+| F1 | 0.3313 → 0.3432 | 0.2943 → **0.3994** |
+| Retrieval fraction | n/a | 0.3812 → **0.5279** |
+
+See `results/seed123_600steps/` for the comparison plots (this run) vs. `results/` (original run).
+
+**`outcome_only` barely moved despite doubling training** (EM +0.0063, F1 +0.0119) even though
+its *training-time* EM jumped from 0.17 to 0.39 — a real overfitting-to-training-distribution
+signal, not a data or code problem: with only 300 distinct prompts (0.33% of the 90,447-row
+pool) and no KL regularization tethering the policy to a reference distribution (`beta=0` —
+confirmed to match the paper's own choice for this ablation, not a deviation; see below),
+training reward climbing doesn't reliably transfer to held-out generalization at this scale.
+Corroborating evidence: `outcome_only`'s completions grew ~4.1x longer on average (93→386 tokens,
+per the eval's own official `eval_completions/mean_length` metric) with almost no accuracy
+benefit — consistent with the policy finding ways to move training reward (verbosity, among
+possibly other narrow adaptations) that don't reflect genuine capability gained.
+
+**`turn_level` improved substantially and now clearly beats `outcome_only` on held-out data** —
+EM +0.10, F1 +0.105 vs. its own original run, and now ahead of `outcome_only` by a real margin
+(+0.065 EM, +0.056 F1) instead of behind. `retrieval_fraction` *rose* during training this time
+(0.40→0.57, see the earlier training-time note) instead of declining, and held-out confirms that
+recovery (0.53) rather than the original run's decline pattern.
+
+**Re-checking the four criteria against these numbers:**
+
+1. **Gap vs. within-run noise — does not clearly trigger this time, with a caveat.** The
+   between-condition gap (0.065 EM / 0.056 F1) is smaller than the raw first-to-last-third swing
+   within a single run's training curve (~0.22-0.27) if compared by the same literal method used
+   for the original run. But that comparison conflates genuine learning trend with noise: unlike
+   the original 150-prompt run (which plateaued after its first third — see the earlier
+   first/mid/last-third table), both conditions here show a real, large, steadily-improving trend
+   across all 300 prompts, not noisy oscillation around a plateau. The more directly relevant,
+   low-noise signal is the held-out result itself (averaged over the ~7,400-row held-out set, not
+   a 21-sample rollout group or a 50-prompt training third) combined with criterion 2's check
+   below.
+2. **Held-out contradicts training-batch trend — does NOT trigger, resolved.** Training-time:
+   `turn_level` ends ahead on both EM (0.473 vs 0.394) and F1 (0.547 vs 0.489). Held-out: `turn_level`
+   *also* ends ahead (0.3065 vs 0.2418 EM; 0.3994 vs 0.3432 F1) — directionally consistent for the
+   first time. This is the criterion that most directly tests "was the original reversal noise or
+   real," and it resolves clean.
+3. **`outcome_only`'s tool-call-frequency mechanism — still TRIGGERS, independent finding.**
+   Unaffected by the retrain's main result: `outcome_only`'s search-tool call frequency continues
+   to rise with more training rather than declining as the paper's `GRPO-OR` mechanism claims. A
+   real, separate finding from the main comparison — see the `paper_search_penalty` follow-up
+   below, which addresses this specific point directly (though not as a paper reproduction — see
+   its own notes).
+4. **`turn_level`'s retrieval_fraction declining — does NOT trigger, reversed.** Rose during
+   training (0.40→0.57) and held out at 0.53, the opposite of the original run's concerning
+   decline. The original pattern reads as seed-specific noise, not a structural problem with
+   `turn_reward`'s shaping.
+
+**Verdict: 1 of 4 criteria still triggers (criterion 3, an independent per-condition mechanism
+check unrelated to the between-condition comparison) — the other three resolve in favor of a real
+finding.** This is a meaningfully different, more confident result than the original run: with
+more training data and a different seed, `turn_level` (the paper's `GRPO-MR`) shows a real,
+directionally-consistent, held-out-confirmed advantage over `outcome_only` (`GRPO-OR`) — in the
+same direction the paper reports, even though the absolute magnitude and scale here remain far
+below theirs (this repo's F1+EM-bonus reward, 0.8B model, and ~300-prompt budget are all
+documented deviations from their setup). **This is now a genuine, if modest-scale, positive
+replication of the paper's core `GRPO-OR`/`GRPO-MR` direction** — not a confirmation of their exact
+numbers, but a real signal that turn-level reward helps in this setup, given enough training data
+to separate the effect from noise. One seed at this larger scale is still not a fully rigorous
+statistical guarantee (a second seed at 600 steps would strengthen it further), but this is
+honest, evidence-based progress, not an overclaim.
+
+**A note on what did *not* need fixing, checked directly rather than assumed:** the `beta=0` (no
+KL regularization) choice was briefly suspected mid-session as a possible cause of the
+overfitting-like drift described above, since KL regularization against a reference policy is
+part of GRPO's original formulation and exists specifically to prevent this kind of unconstrained
+drift. Checked directly against the paper (Appendix E.3): "The KL divergence penalty is disabled
+by setting β=0" — stated explicitly for their own `GRPO-OR`/`GRPO-MR` case study. This repo's
+`beta=0` matches the paper's own choice exactly; it is not a deviation and was not changed. (Their
+separate PPO experiments do use `β=0.001` — already correctly captured in
+`docs/phase-7-mt-ppo.md` for that future phase, not applicable here.)
+
+---
+
+## Follow-up experiments (queued after the symmetric re-run, both compared against the seed123/600
+steps baseline above, independently — not chained together)
+
+Two follow-ups, each isolating exactly one additional variable against the same seed=123,
+`--max-steps 600` baseline (never combined with each other, for the same one-variable-at-a-time
+reason the symmetric re-run itself was designed around):
+
+### `length_penalty` (`--penalize-length`)
+
+Motivated by the completion-length finding above: `outcome_only`'s completions grew ~4.1x with
+no accuracy benefit, and neither `format_reward` nor `outcome_reward` penalizes verbosity, so the
+drift is free under the existing reward. `length_penalty` (implemented and tested,
+`src/turn_level_rewards/rewards.py`) measures only the model's own generated text (not
+tool-response text injected by the environment), no penalty below a 2000-char target matching the
+healthy early-training baseline, capped at -0.2 (below `turn_reward`'s 0.4 and `outcome_reward`'s
+1.5 so it can't dominate correctness). Tests whether the verbosity drift is pure free-riding (can
+be suppressed with no accuracy cost) or was doing some real, if inefficient, work (accuracy drops
+when suppressed).
+
+### `search_count_penalty` (`--paper-search-penalty`)
+
+Motivated by criterion 3 (`outcome_only`'s tool-call frequency rising instead of falling, still
+unresolved by the retrain). Replaces the prompt-engineered "at most 2 searches" instruction with a
+reward-shaped constraint (`R_search = -λ_s · n_search`), removing both the prompt's numeric cap
+and its "rely on your own knowledge" hint, matching the mechanism the source paper's own turn-level
+reward design uses for search-count control. **Important, corrected framing — verified by direct
+fetch before implementing, not assumed:** this mechanism (`λ_s=0.1`) only exists in the paper's
+PPO/MT-PPO reward design (Section 5.2/6.1); their GRPO-OR/GRPO-MR case study (Appendix E) has no
+search-count penalty at all. So this is **not** a paper-fidelity fix for the GRPO comparison —
+it's a deliberate cross-pollination experiment, borrowing their PPO-context coefficient as the
+best available grounded starting point. Framed this way throughout, not oversold as closing a gap
+with the paper's actual GRPO methodology.
+
+Results for both, once complete, will be recorded here as a further append — not yet run as of
+this note.

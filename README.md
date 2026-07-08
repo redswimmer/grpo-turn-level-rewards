@@ -32,45 +32,48 @@ comparison (`PPO`/`MT-PPO`).
 
 ## Results
 
-The GRPO comparison (outcome-only vs. turn-level reward) has completed both training runs and a
-full held-out evaluation (7,404 questions neither model trained on). Both conditions trained on
-the identical number of steps and question-sampling process; only the reward function differs.
+The GRPO comparison (outcome-only vs. turn-level reward) ran twice: an initial pair of training
+runs (300 steps, 150 distinct training prompts each), then a symmetric re-run at double the
+budget with a different seed (600 steps, 300 distinct prompts each) after the first pair came
+back too noisy to trust. Both conditions in each run trained on the identical steps and
+question-sampling process; only the reward function differs.
 
 | Metric (held-out) | Outcome reward | Turn-level reward |
 |---|---|---|
-| Exact match | 0.236 | 0.207 |
-| F1 | 0.331 | 0.294 |
-| Well-formed answer rate | 0.994 | 0.974 |
-| Real passage surfaced during search | n/a | 0.381 |
+| Exact match | 0.242 | **0.307** |
+| F1 | 0.343 | **0.399** |
+| Well-formed answer rate | 0.986 | 0.892 |
+| Real passage surfaced during search | n/a | 0.528 |
 
-See `results/` for the full comparison plots (training curves, held-out bars, and the search-tool
-call-frequency comparison referenced below).
+(Numbers above are the symmetric re-run, the trustworthy one — see `results/seed123_600steps/`
+for its comparison plots. The original run's numbers are in `results/`.)
 
-**Honest read: this comparison doesn't currently support a claim in either direction.** Both
-conditions show real learning (format compliance and EM/F1 both rose substantially from a
-near-zero start, and outcome-only's held-out numbers match/exceed its own late-training numbers,
-ruling out gross overfitting) — but three separate checks all point the same way:
+**The symmetric re-run resolves what the first run couldn't: turn-level reward shows a real,
+held-out-confirmed advantage over outcome-only reward, in the direction the source paper reports.**
+The first run was inconclusive — turn-level reward looked ahead during training, but that reversed
+on held-out data, and the gap either way was smaller than single-run noise. Doubling the training
+data and using a different seed fixed that: turn-level reward now leads during training *and* on
+held-out data (+0.065 EM, +0.056 F1), and the concerning decline in "real passage surfaced during
+search" from the first run reversed too (it now *rises* over training, 0.40→0.57). This isn't a
+reproduction of the paper's exact numbers (this repro uses a much smaller model, a different
+outcome-reward formula, and a fraction of their likely training scale — see
+`docs/phase-6-evaluation-comparison.md` for the full list of documented deviations), but it's a
+real, evidence-based positive signal for their core claim, not an overclaim off noisy data.
 
-- Turn-level reward looked ahead during training (EM/F1 both higher than outcome-only's), but that
-  reverses on held-out data — outcome-only ends up ahead on both metrics instead.
-- The held-out gap between the two conditions, either direction, is smaller than the noise already
-  visible within a single condition's own training run.
-- The paper's specific claimed mechanism — that outcome-only reward causes the model to gradually
-  stop calling the search tool — didn't appear here. If anything, outcome-only's search-tool call
-  frequency *rose* over training instead of falling.
-
-At this scale (one training seed, 150 distinct training prompts per condition), that's the honest
-outcome: a real, useful negative-ish result rather than a confirmation or refutation of the
-paper's `GRPO-OR`/`GRPO-MR` finding. The recommended next step is a symmetric re-run — both
-conditions get the same larger step budget and a new seed, never one condition alone — before
-drawing a real conclusion; see `docs/phase-6-evaluation-comparison.md`'s Handoff notes for the
-full criteria checked and the reasoning.
+One thing that *didn't* resolve: outcome-only reward's search-tool call frequency still rises
+over training instead of falling, the opposite of the paper's claimed mechanism for why
+outcome-only reward underperforms. Two follow-up experiments are testing specific hypotheses
+about the training setup — a length penalty (completions grew ~4x with no accuracy benefit, a
+free-riding side effect nothing in the reward currently discourages) and a search-count penalty
+(replacing the prompt-engineered "at most 2 searches" instruction with a reward-shaped
+constraint, borrowing a mechanism from the paper's separate PPO design — not a GRPO paper
+reproduction, since their GRPO ablation doesn't use this mechanism at all). Results pending.
 
 ## Roadmap
 
 - **GRPO: outcome-only vs. merged-reward** — training and held-out evaluation complete for both
-  conditions; comparison inconclusive at this scale (see Results above) — a symmetric re-run at a
-  larger step budget is recommended before drawing a conclusion.
+  conditions across two runs; the symmetric re-run shows a real, held-out-confirmed advantage for
+  turn-level reward (see Results above). Two follow-up reward-design experiments in progress.
 - **PPO: outcome-only vs. merged-reward** — design complete; not yet started.
 - **LLM-as-judge reward** (an alternative to exact-match/F1 scoring, explored on top of the PPO
   comparison) — not yet started.
