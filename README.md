@@ -152,6 +152,32 @@ Full numbers, example completions from the collapses, and the complete methodolo
 `docs/phase-6-evaluation-comparison.md` — not required reading, everything above is the full
 story.
 
+### 4. What this adds beyond reproducing the paper
+
+Three things here aren't in the source paper at all:
+
+- **The isolating control.** The paper never asks "which half of a change caused the failure" —
+  when its own `R_search` penalty is borrowed into GRPO here and both conditions collapse, this
+  repo doesn't stop there. It runs a fourth configuration that removes only the prompt guidance
+  and adds no penalty, cleanly separating two effects that were previously bundled into one
+  experiment. That's what turned "the search-count penalty broke GRPO" into "the *penalty term
+  specifically* broke GRPO, not the missing guidance" — a real methodological addition, not
+  something the paper's own ablations distinguish.
+- **A mechanistic account of *why* GRPO is more fragile to bare penalty terms than PPO.** The
+  paper reports that things fail; it doesn't explain the mechanism the way Result 3 above does —
+  GRPO has no value function to fall back on when an entire batch of attempts shares the same
+  blind spot, so a penalty with no matching positive incentive can make honest effort look
+  strictly worse than a cheap trick, for every attempt in the batch simultaneously. That
+  explanation came from directly reading the model's actual (collapsed) completions at multiple
+  points in training, not from an a priori theory.
+- **A reward-design choice that's arguably more robust at small scale, not just a compromise.**
+  Using F1 partial credit instead of the paper's pure binary exact-match reward isn't only "what
+  we did instead" — it's plausibly *why* this repro's outcome-reward agent learned anything at
+  all (0.242 EM) where the paper's own binary-reward version scored a flat 0.0. A reward that can
+  give partial credit avoids an all-or-nothing group of attempts scoring identically, which is
+  exactly the situation GRPO's relative-ranking signal can't learn from. That's a transferable
+  point for anyone running GRPO at a similarly small scale, not specific to this repo.
+
 ## Roadmap
 
 - **GRPO: outcome-only vs. merged-reward** — training and held-out evaluation complete for both
