@@ -97,26 +97,39 @@ resolved it, with turn-level reward leading on both training *and* held-out data
 both runs are in `docs/phase-6-evaluation-comparison.md`.
 </details>
 
-### 3. Naive attempts to improve it further backfired — and that's the more interesting finding
+### 3. Three quick reward-shaping patches, tested against the working baseline above — all backfired
+
+*("Quick" here means these three patches were first-pass, uncalibrated reward-engineering
+attempts made in one session — not a claim about `turn_level`/`GRPO-MR` itself. That's a separate,
+real distinction the source paper draws in its own ablation ladder — `GRPO-MR` vs. its own,
+more sophisticated `MT-GRPO` — which this repo doesn't attempt; see the Goal section of
+`docs/phase-6-evaluation-comparison.md` for why.)*
 
 The natural next question: can we push turn-level reward's advantage further, or fix outcome
-reward's remaining weaknesses, with a bit more reward engineering? Three experiments tried. **None
-worked** — but the *way* they failed is the actual lesson here.
+reward's remaining weaknesses (like the rising-search-frequency mismatch above), with a bit more
+reward engineering? Three experiments tried, each compared against Result 2's baseline numbers
+(outcome reward 0.242 EM, turn-level reward 0.307 EM). **None worked** — but the *way* they failed
+is the actual lesson here.
 
 ![Held-out exact match across all four reward configurations](results/followup_experiments_comparison.png)
 
-- **A length penalty** (discourage long completions) **collapsed outcome reward completely** —
-  the model stopped searching and started producing incoherent, garbled text. Turn-level reward
-  survived, with only a modest real cost.
-- **A search-count penalty** (punish each search call directly, borrowed from the source paper's
-  separate PPO design) was **even worse for outcome reward** — same total collapse, but this time
-  the final answers were nonsense strings, not just wrong. Turn-level reward also took damage this
-  time (it collapsed too, for about 70% of training) but *recovered* in the final stretch — outcome
-  reward never did.
+- **A length penalty** (discourage long completions, penalizing anything over 2000 characters) —
+  **not from the paper** at all, tried because completions had grown ~4x over training with no
+  accuracy benefit, purely a repo-original experiment. **Outcome reward collapsed** from 0.242 to
+  **0.090 EM**: the model stopped searching and started producing incoherent, garbled text.
+  Turn-level reward dropped more modestly, from 0.307 to **0.254 EM**, and stayed coherent.
+- **The paper's own `R_search = -λ_s · n_search` search-count penalty** (`λ_s = 0.1`) — this *is*
+  a real paper term, but from their separate PPO reward design (Section 5.2/6.1), not their GRPO
+  ablation, which has no such term. Borrowing it into GRPO here is a deliberate cross-algorithm
+  experiment, not a paper reproduction. **Worse for outcome reward still**, down to **0.024 EM**,
+  and this time the final answers were nonsense strings, not just wrong. Turn-level reward dropped
+  to **0.221 EM** — it collapsed too, for about 70% of training, but *recovered* in the final
+  stretch, which outcome reward never did.
 - **A control experiment** — removing the original prompt instruction ("search at most twice")
   with *no* reward penalty at all — isolated why: outcome reward searched *more*, not less,
-  without that instruction, and paid only a small accuracy cost. So the two penalty experiments'
-  collapses weren't about losing guidance — they were caused by the penalty itself.
+  without that instruction, and dropped only slightly, to **0.201 EM**. Turn-level reward actually
+  ticked *up* to **0.320 EM**, no cost at all. So the two penalty experiments' collapses weren't
+  about losing guidance — they were caused by the penalty itself, isolated cleanly by this control.
 
 **Why this happens, in plain terms:** GRPO scores a batch of the model's attempts at one question
 purely *relative to each other* — there's no separate "how good is this really" estimate to fall
