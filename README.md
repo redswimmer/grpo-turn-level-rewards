@@ -16,8 +16,13 @@ answer. Three reward methodologies, in increasing order of sophistication:
 - **`GRPO-MR` — naive merged (this repo's `turn_level`).** The same final-answer score, *plus* a
   bonus for good search behavior — but both are summed into one combined number per attempt, so
   it's still just one score in, one score out.
-- **`MT-GRPO` — true step rewards (the paper's own design; not implemented in this repo).** Each
-  turn gets its *own*, separately-estimated credit, instead of everything folding into one number.
+- **True step rewards — not implemented in this repo.** Each turn gets its *own*, separately
+  estimated credit, instead of everything folding into one number. The paper proposes two
+  versions of this: `MT-PPO`, its actual main, best-benchmarked method (uses PPO's critic); and
+  `MT-GRPO`, a GRPO-based version the paper itself flags as needing exponentially many rollouts
+  and only tests in a small case study.
+
+**`GRPO-OR`:**
 
 ```mermaid
 flowchart LR
@@ -25,8 +30,10 @@ flowchart LR
     D1 -- search --> S1["Search"]
     S1 --> D1
     D1 -- answer --> A1(["Final answer"])
-    A1 ==> R1{{"GRPO-OR:<br/>one score<br/>(exact-match + F1)"}}
+    A1 ==> R1{{"One score:<br/>exact-match + F1"}}
 ```
+
+**`GRPO-MR` (this repo's `turn_level`):**
 
 ```mermaid
 flowchart LR
@@ -35,17 +42,19 @@ flowchart LR
     S2 --> D2
     S2 -.->|"+bonus if real<br/>supporting passage"| R2
     D2 -- answer --> A2(["Final answer"])
-    A2 ==> R2{{"GRPO-MR:<br/>still one combined score<br/>(exact-match + F1 + bonus)"}}
+    A2 ==> R2{{"Still one combined score:<br/>exact-match + F1 + bonus"}}
 ```
+
+**True step rewards (`MT-PPO` / `MT-GRPO`, not implemented here):**
 
 ```mermaid
 flowchart LR
     Q3(["Question"]) --> D3{"Search again,<br/>or answer?"}
     D3 -- search --> S3["Search"]
     S3 --> D3
-    S3 -.-> R3a{{"Turn's own credit"}}
+    S3 -.-> R3a{{"This turn's own credit"}}
     D3 -- answer --> A3(["Final answer"])
-    A3 -.-> R3b{{"Turn's own credit"}}
+    A3 -.-> R3b{{"This turn's own credit"}}
 ```
 
 This repo runs the first two, under both GRPO and PPO — see Results and Roadmap for what's done
