@@ -32,55 +32,82 @@ comparison (`PPO`/`MT-PPO`).
 
 ## Results
 
-The GRPO comparison (outcome-only vs. turn-level reward) ran twice: an initial pair of training
-runs (300 steps, 150 distinct training prompts each), then a symmetric re-run at double the
-budget with a different seed (600 steps, 300 distinct prompts each) after the first pair came
-back too noisy to trust. Both conditions in each run trained on the identical steps and
-question-sampling process; only the reward function differs.
+### 1. Turn-level reward wins — a real, held-out-confirmed advantage
 
-| Metric (held-out) | Outcome reward | Turn-level reward |
+![Held-out exact match and F1: outcome reward vs. turn-level reward](results/held_out_em_f1_comparison.png)
+
+| Metric (held-out, 7,404 questions the model never trained on) | Outcome reward | Turn-level reward |
 |---|---|---|
 | Exact match | 0.242 | **0.307** |
 | F1 | 0.343 | **0.399** |
-| Well-formed answer rate | 0.986 | 0.892 |
-| Real passage surfaced during search | n/a | 0.528 |
+| Real supporting-fact passage surfaced during search | n/a | 0.528 |
 
-(Numbers above are the symmetric re-run, the trustworthy one — see `results/seed123_600steps/`
-for its comparison plots. The original run's numbers are in `results/`.)
+Both agents used the identical model, tool-calling setup, and RL algorithm (GRPO) — the *only*
+difference is whether the reward includes a bonus for surfacing a real supporting-fact passage
+during search, on top of scoring the final answer. That one change is worth **+0.065 exact match,
++0.056 F1** on questions the model never saw during training. The intuition: outcome reward only
+tells the agent "you got it right" or "you didn't," at the very end of a multi-step episode — the
+agent has to figure out *which* of its search decisions mattered. Turn-level reward gives credit
+for good intermediate behavior directly, which is a much easier signal to learn from.
 
-**The symmetric re-run resolves what the first run couldn't: turn-level reward shows a real,
-held-out-confirmed advantage over outcome-only reward, in the direction the source paper reports.**
-The first run was inconclusive — turn-level reward looked ahead during training, but that reversed
-on held-out data, and the gap either way was smaller than single-run noise. Doubling the training
-data and using a different seed fixed that: turn-level reward now leads during training *and* on
-held-out data (+0.065 EM, +0.056 F1), and the concerning decline in "real passage surfaced during
-search" from the first run reversed too (it now *rises* over training, 0.40→0.57). This isn't a
-reproduction of the paper's exact numbers (this repro uses a much smaller model, a different
-outcome-reward formula, and a fraction of their likely training scale — see
-`docs/phase-6-evaluation-comparison.md` for the full list of documented deviations), but it's a
-real, evidence-based positive signal for their core claim, not an overclaim off noisy data.
+<details>
+<summary>Is this just favorable timing, or does it hold up throughout training?</summary>
 
-One thing that *didn't* resolve: outcome-only reward's search-tool call frequency still rises
-over training instead of falling, the opposite of the paper's claimed mechanism for why
-outcome-only reward underperforms. Three follow-up experiments investigated this and related
-reward-shaping questions — none improved on the baseline, but all three are informative:
+![Smoothed training curves: exact match and F1 over training steps](results/training_curves_smoothed.png)
 
-- **A length penalty** (discouraging long completions) collapsed outcome-only reward completely
-  (the model stopped searching and answering coherently) while costing turn-level reward a
-  smaller, real amount of accuracy.
-- **A search-count penalty** (replacing the prompt's "at most 2 searches" instruction with a
-  reward-shaped constraint, borrowing a mechanism from the paper's separate PPO design — not a
-  GRPO reproduction) failed even more severely for outcome-only reward, and cost turn-level reward
-  real accuracy too, though turn-level reward recovered from an initial collapse phase where
-  outcome-only reward never did.
-- **An isolating control** (removing the prompt instruction with *no* reward penalty) confirmed
-  the search-count penalty's failures were caused by the penalty term itself, not by losing the
-  prompt guidance — removing the guidance alone caused a much milder, opposite failure mode
-  (over-searching) for outcome-only reward, and no measurable cost at all for turn-level reward.
+Turn-level reward (orange) leads for most of training, not just at the final checkpoint — this
+rules out "got lucky at the end" as the explanation. (Curves are a 15-point rolling average of
+per-step training metrics; the raw values are noisy step-to-step, as GRPO reward inherently is —
+smoothing is only for readability, not a different underlying result.)
 
-Full numbers and the complete analysis are in `docs/phase-6-evaluation-comparison.md`. The
-consistent theme: outcome-only reward's narrow two-term composition is fragile to any added
-penalty; turn-level reward's extra retrieval-based term provides real but incomplete protection.
+One methodological note for the curious: this result needed two attempts. A first, smaller run
+(300 steps) came back too noisy to trust — turn-level reward looked ahead during training but that
+reversed on held-out data. Doubling the training budget and re-running with a different seed
+resolved it, with turn-level reward leading on both training *and* held-out data. Full numbers for
+both runs are in `docs/phase-6-evaluation-comparison.md`.
+</details>
+
+### 2. Naive attempts to improve it further backfired — and that's the more interesting finding
+
+The natural next question: can we push turn-level reward's advantage further, or fix outcome
+reward's remaining weaknesses, with a bit more reward engineering? Three experiments tried. **None
+worked** — but the *way* they failed is the actual lesson here.
+
+![Held-out exact match across all four reward configurations](results/followup_experiments_comparison.png)
+
+- **A length penalty** (discourage long completions) **collapsed outcome reward completely** —
+  the model stopped searching and started producing incoherent, garbled text. Turn-level reward
+  survived, with only a modest real cost.
+- **A search-count penalty** (punish each search call directly, borrowed from the source paper's
+  separate PPO design) was **even worse for outcome reward** — same total collapse, but this time
+  the final answers were nonsense strings, not just wrong. Turn-level reward also took damage this
+  time (it collapsed too, for about 70% of training) but *recovered* in the final stretch — outcome
+  reward never did.
+- **A control experiment** — removing the original prompt instruction ("search at most twice")
+  with *no* reward penalty at all — isolated why: outcome reward searched *more*, not less,
+  without that instruction, and paid only a small accuracy cost. So the two penalty experiments'
+  collapses weren't about losing guidance — they were caused by the penalty itself.
+
+**Why this happens, in plain terms:** GRPO scores a batch of the model's attempts at one question
+purely *relative to each other* — there's no separate "how good is this really" estimate to fall
+back on, the way PPO's value function provides. So if every attempt in a batch stumbles onto the
+same cheap trick — "just guess something, don't bother searching, accept the penalty is smaller
+than the risk of a real answer" — GRPO has no way to see past that shared blind spot. It doesn't
+just fail to punish the trick; it can't even tell the trick happened, because everything in the
+batch looks equally (un)rewarding. Outcome reward's simple two-part scoring (nail the format, get
+the answer right) gave the model nowhere else to go once a penalty made honest effort look risky.
+Turn-level reward's extra signal — credit for good search behavior specifically — gave the model
+something to hold onto even under penalty pressure, which is why it bent instead of breaking.
+
+**The takeaway for anyone shaping a reward function under GRPO specifically**: adding a bare
+penalty term without a matching positive incentive pulling toward the behavior you actually want
+is genuinely risky — more risky than the same change might be under an algorithm with a value
+function (like PPO) to catch a whole batch making the same mistake. A denser, more structured
+reward isn't just "more accurate" — it's also more robust to your own future changes.
+
+Full numbers, example completions from the collapses, and the complete methodology are in
+`docs/phase-6-evaluation-comparison.md` — not required reading, everything above is the full
+story.
 
 ## Roadmap
 
