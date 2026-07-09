@@ -13,8 +13,7 @@ Same agent, same decision loop — at each turn it decides for itself whether to
 answer. Four experiments cross two reward designs with two RL algorithms; this repo has run the
 two GRPO ones so far (see Results).
 
-**Where the reward attaches — `GRPO-OR` (outcome only) vs. `GRPO-MR` (turn-level, the paper's own
-"naive" merged-reward mechanism):**
+**Where the reward attaches — `GRPO-OR` (outcome only) vs. `GRPO-MR` (turn-level):**
 
 ```mermaid
 flowchart LR
