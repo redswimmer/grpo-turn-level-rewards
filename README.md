@@ -9,14 +9,16 @@ Reward Design"](https://arxiv.org/abs/2505.11821) (arXiv:2505.11821) — its GRP
 
 ## What this compares
 
-Same agent, same run through the question — one attempt is: search up to twice, then answer. The
-only thing that changes is *where* the reward attaches:
+Same agent, same decision loop — at each turn it decides for itself whether to search again or
+answer. The only thing that changes is *where* the reward attaches:
 
 ```mermaid
 flowchart LR
-    Q(["Question"]) --> S1["Search, turn 1"] --> S2["Search, turn 2"] --> Ans(["Final answer"])
-    S1 -. "turn-level reward only:<br/>+bonus for a real supporting passage" .-> Score
-    S2 -. "turn-level reward only:<br/>+bonus for a real supporting passage" .-> Score
+    Q(["Question"]) --> D{"Search again,<br/>or answer?"}
+    D -- "search" --> Se["Search"]
+    Se --> D
+    Se -. "turn-level reward only:<br/>+bonus for a real supporting passage" .-> Score
+    D -- "answer" --> Ans(["Final answer"])
     Ans == "both conditions:<br/>exact-match + F1 score" ==> Score{{"Reward"}}
 ```
 
@@ -80,11 +82,12 @@ attempt.*
 
 **Consistent**: turn-level reward wins in both, same direction as the paper — and our 0.307 lands
 close to the paper's own 0.335 winning number. **Deviates in three ways**: our numbers are lower
-overall (smaller model, less data, a 2-search cap vs. the paper's 1 — HotpotQA is 2-hop, so a
-1-search cap can't ever fully succeed); outcome reward here didn't collapse to 0.0 like the
-paper's did (likely the F1-bonus reward choice — see Result 4); and one thing didn't reproduce at
-all — the paper says outcome reward gradually *stops* searching over training, here it searches
-*more* over time, an open, unexplained discrepancy.
+overall (smaller model, less data, and the agent here is only encouraged toward at most 2 searches
+rather than hard-limited to the paper's exactly 1 — HotpotQA is 2-hop, so a hard 1-search limit
+can't ever fully succeed); outcome reward here didn't collapse to 0.0 like the paper's did (likely
+the F1-bonus reward choice — see Result 4); and one thing didn't reproduce at all — the paper says
+outcome reward gradually *stops* searching over training, here it searches *more* over time, an
+open, unexplained discrepancy.
 
 <details>
 <summary>Is the EM/F1 win just favorable timing, or does it hold up throughout training?</summary>
