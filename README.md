@@ -32,26 +32,56 @@ comparison (`PPO`/`MT-PPO`).
 
 ## Results
 
-### 1. Turn-level reward wins — a real, held-out-confirmed advantage
+**Status: the GRPO comparison below (outcome reward vs. turn-level reward, Results 1–3) is
+complete.** The PPO comparison described above has a finished design but hasn't been run yet —
+see Roadmap. Everything below is GRPO-only.
+
+### 1. What's actually being measured
+
+The agent answers multi-hop trivia questions (from HotpotQA's validation split — 7,404 questions
+neither reward condition ever trained on) by searching a real ~21M-passage Wikipedia snapshot and
+producing a final answer. Three metrics track different things:
+
+- **Exact match (EM)** — did the agent's final answer literally match an accepted answer string?
+  Strict: "Barack Obama" ≠ "Obama."
+- **F1** — word-overlap partial credit (the standard SQuAD-style scoring paper QA benchmarks use)
+  for answers that are close but not verbatim.
+- **Retrieval fraction** — of the real supporting-fact passages actually needed to answer the
+  question, what fraction did the agent's searches surface? Only meaningful for turn-level reward,
+  since that's the only condition whose reward depends on it.
+
+### 2. Turn-level reward wins — consistent with the source paper's direction, smaller in magnitude
 
 ![Held-out exact match and F1: outcome reward vs. turn-level reward](results/held_out_em_f1_comparison.png)
 
-| Metric (held-out, 7,404 questions the model never trained on) | Outcome reward | Turn-level reward |
-|---|---|---|
-| Exact match | 0.242 | **0.307** |
-| F1 | 0.343 | **0.399** |
-| Real supporting-fact passage surfaced during search | n/a | 0.528 |
+| Metric (held-out) | Outcome reward | Turn-level reward | Source paper's `GRPO-OR` / `GRPO-MR` (Table 2) |
+|---|---|---|---|
+| Exact match | 0.242 | **0.307** | 0.0 / **0.335** |
+| F1 | 0.343 | **0.399** | not reported |
+| Retrieval fraction | n/a | 0.528 | not reported |
 
-Both agents used the identical model, tool-calling setup, and RL algorithm (GRPO) — the *only*
-difference is whether the reward includes a bonus for surfacing a real supporting-fact passage
-during search, on top of scoring the final answer. That one change is worth **+0.065 exact match,
-+0.056 F1** on questions the model never saw during training. The intuition: outcome reward only
-tells the agent "you got it right" or "you didn't," at the very end of a multi-step episode — the
-agent has to figure out *which* of its search decisions mattered. Turn-level reward gives credit
-for good intermediate behavior directly, which is a much easier signal to learn from.
+**Consistent with the paper**: turn-level reward beats outcome reward in both — the direction the
+paper reports holds up here too. **Deviates in two ways worth being explicit about:**
+
+- *Magnitude.* Our numbers are both lower and closer together than the paper's. This repo uses a
+  far smaller model (0.8B vs. the scale papers like this typically train at) and a fraction of the
+  likely training data — a much lower ceiling on absolute performance is expected, not a red flag.
+- *Outcome reward's total failure didn't reproduce.* The paper's `GRPO-OR` scores a stark **0.0**
+  exact match — total collapse. Ours scores a real, non-trivial 0.242. The most likely reason,
+  documented and deliberate: the paper's outcome reward is pure binary exact-match (1.0 or 0.0,
+  nothing in between), while this repo's adds F1 partial credit specifically because a group of
+  rollouts that all score a flat 0 gives GRPO's relative-ranking signal nothing to learn from —
+  partial credit avoids that trap. So our outcome-only agent actually learns something, where the
+  paper's apparently didn't. This is a genuine, acknowledged difference in setup, not a
+  reproduction of their exact ablation.
+
+**One further mechanism claim from the paper did *not* reproduce**: the paper states `GRPO-OR`
+"gradually stops calling search tools" over training. Here, outcome reward's search-call frequency
+*rises* over training instead of declining — the opposite trend. This is a real, unresolved
+discrepancy (not explained away), independent of the main EM/F1 result above.
 
 <details>
-<summary>Is this just favorable timing, or does it hold up throughout training?</summary>
+<summary>Is the EM/F1 win just favorable timing, or does it hold up throughout training?</summary>
 
 ![Smoothed training curves: exact match and F1 over training steps](results/training_curves_smoothed.png)
 
@@ -67,7 +97,7 @@ resolved it, with turn-level reward leading on both training *and* held-out data
 both runs are in `docs/phase-6-evaluation-comparison.md`.
 </details>
 
-### 2. Naive attempts to improve it further backfired — and that's the more interesting finding
+### 3. Naive attempts to improve it further backfired — and that's the more interesting finding
 
 The natural next question: can we push turn-level reward's advantage further, or fix outcome
 reward's remaining weaknesses, with a bit more reward engineering? Three experiments tried. **None
