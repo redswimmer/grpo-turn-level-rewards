@@ -102,11 +102,9 @@ rules out "got lucky at the end" as the explanation. (Curves are a 15-point roll
 per-step training metrics; the raw values are noisy step-to-step, as GRPO reward inherently is —
 smoothing is only for readability, not a different underlying result.)
 
-One methodological note for the curious: this result needed two attempts. A first, smaller run
-(300 steps) came back too noisy to trust — turn-level reward looked ahead during training but that
-reversed on held-out data. Doubling the training budget and re-running with a different seed
-resolved it, with turn-level reward leading on both training *and* held-out data. Full numbers for
-both runs are in `docs/phase-6-evaluation-comparison.md`.
+This needed two attempts: a first, smaller run (300 steps) was too noisy — turn-level reward led
+in training but reversed on held-out data. Doubling the budget and using a new seed resolved it,
+with turn-level reward leading on both.
 </details>
 
 ### 3. Three quick reward-shaping patches, tested against the working baseline above — all backfired
@@ -138,16 +136,11 @@ the model something to hold onto instead; outcome reward's plainer signal didn't
 **Takeaway**: a bare penalty with no matching positive incentive is genuinely risky under GRPO —
 more so than under an algorithm with a value function to catch a group sharing one mistake.
 
-Full numbers and example collapsed completions: `docs/phase-6-evaluation-comparison.md`.
-
 ### 4. What this adds beyond reproducing the paper
 
-- **The isolating control itself.** The paper never separates "penalty term" from "missing
-  guidance" as two causes — this repo's fourth configuration does, turning a guess into a specific
-  finding.
 - **A mechanism, not just a result.** *Why* GRPO is more fragile to bare penalties than PPO — no
   value function, so a whole group can share one blind spot — came from reading the model's actual
-  collapsed completions, not from theory.
+  collapsed completions, not from theory. The paper reports failures; it doesn't explain this one.
 - **The F1-bonus reward choice, reframed.** Plausibly not just "what we used instead" but *why*
   this repro's outcome-only agent learned anything at all, where the paper's binary-reward version
   scored 0.0 — a transferable point for GRPO at small scale.
