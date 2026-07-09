@@ -1,7 +1,10 @@
 # Outcome vs. Turn-Level Reward for Multi-Turn Search Agents
 
-A small-scale experiment testing whether rewarding an AI agent's intermediate actions — not just
-its final answer — helps it learn faster and more reliably.
+**Goal**: determine whether rewarding an AI agent's intermediate actions — not just its final
+answer — produces a measurably better multi-turn search agent, and whether that effect is real
+or just training noise. "Real" means a specific bar: the effect has to hold up on data the model
+never trained on, not just look good on the training curve, and it has to survive being checked
+against a second, independent training run before being reported as a finding.
 
 ## What this compares
 
@@ -30,11 +33,33 @@ Reasoning in LLM Agents via Turn-Level Reward Design"](https://arxiv.org/abs/250
 (arXiv:2505.11821): its Appendix E GRPO case study (`GRPO-OR`/`GRPO-MR`), and its main-results PPO
 comparison (`PPO`/`MT-PPO`).
 
+## Key decisions & tradeoffs
+
+| Decision | Why | Tradeoff accepted |
+|---|---|---|
+| Real ~21M-passage Wikipedia retrieval corpus, not a closed per-question pool | A closed 10-paragraph pool makes "did the agent search well" a trivial 10-way pick — not a meaningful test of retrieval-driven reward | Real setup cost: a JDK, a ~7.4GB index download, a standalone retrieval server process to keep running |
+| `Qwen3.5-0.8B`, not a larger model | Fits one RTX 4090 with no distributed training or quantization tricks needed | A much lower reachable-accuracy ceiling than the source paper's likely larger model — absolute numbers aren't comparable to theirs, only direction |
+| Search cap of "at most 2" (paper uses "at most 1") | HotpotQA is genuinely 2-hop (avg. 2.00 unique gold supporting facts/question) — a 1-search cap makes it structurally impossible to ever surface both, regardless of policy quality | A deliberate, stated deviation from the paper's exact task setup |
+| Outcome reward uses F1 + an exact-match bonus, not the paper's pure binary exact-match | GRPO's only training signal is variance *within* a group of attempts at one question; an all-0 group (a real risk early in training under a strict binary reward) gives zero gradient to learn from | Not a reproduction of the paper's exact reward — turned out to matter, see Result 4 below |
+| Required a second, symmetric training run before trusting the headline result | The first run's finding reversed direction between training and held-out data — a smaller effect than single-run noise | Real cost: roughly double the GPU time before anything got reported |
+| When a reward-shaping fix made things worse, ran an isolating control instead of concluding directly | The failing experiment bundled two changes into one; without isolating them, "this penalty is bad" would have been a guess, not a finding | Another full training-and-eval cycle, for a result that's now specific and defensible |
+| `MT-GRPO` (the paper's own more sophisticated per-turn credit assignment) — out of scope | TRL's `GRPOTrainer` has no supported hook for a custom per-turn advantage; doing it for real means patching non-public trainer internals, not a documented extension point | This repro tests the paper's `GRPO-OR`/`GRPO-MR` ablation only, not its full method |
+
 ## Results
 
-**Status: the GRPO comparison below (outcome reward vs. turn-level reward, Results 1–3) is
+**Status: the GRPO comparison below (outcome reward vs. turn-level reward, Results 1–4) is
 complete.** The PPO comparison described above has a finished design but hasn't been run yet —
 see Roadmap. Everything below is GRPO-only.
+
+**Key learnings, before the detail:**
+1. Turn-level reward genuinely wins — and only *after* it survived a second independent run was
+   that trustworthy enough to report (Result 2).
+2. GRPO is more fragile to careless reward-shaping than it looks going in: with no value function
+   to fall back on, a whole batch of attempts can share one blind spot and collapse together
+   (Result 3).
+3. A reward-design choice made for an unrelated reason (avoiding zero-gradient groups) plausibly
+   explains why this repro's simplest agent learned anything at all, where the paper's own
+   version of it didn't (Result 4).
 
 ### 1. What's actually being measured
 
