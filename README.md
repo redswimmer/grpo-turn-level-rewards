@@ -86,7 +86,8 @@ penalty; turn-level reward's extra retrieval-based term provides real but incomp
 
 - **GRPO: outcome-only vs. merged-reward** — training and held-out evaluation complete for both
   conditions across two runs; the symmetric re-run shows a real, held-out-confirmed advantage for
-  turn-level reward (see Results above). Two follow-up reward-design experiments in progress.
+  turn-level reward (see Results above). Three follow-up reward-design experiments are complete
+  (see Results above); Phase 6 is fully done.
 - **PPO: outcome-only vs. merged-reward** — design complete; not yet started.
 - **LLM-as-judge reward** (an alternative to exact-match/F1 scoring, explored on top of the PPO
   comparison) — not yet started.
