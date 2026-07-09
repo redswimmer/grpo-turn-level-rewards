@@ -1,10 +1,12 @@
 # Outcome vs. Turn-Level Reward for Multi-Turn Search Agents
 
 **Goal**: determine whether rewarding an AI agent's intermediate actions — not just its final
-answer — produces a measurably better multi-turn search agent, and whether that effect is real
-or just training noise. "Real" means a specific bar: the effect has to hold up on data the model
-never trained on, not just look good on the training curve, and it has to survive being checked
-against a second, independent training run before being reported as a finding.
+answer — produces a measurably better multi-turn search agent. To count, the effect must hold up
+on data the model never trained on, and survive a second, independent training run.
+
+A simplified reproduction of ["Reinforcing Multi-Turn Reasoning in LLM Agents via Turn-Level
+Reward Design"](https://arxiv.org/abs/2505.11821) (arXiv:2505.11821) — its Appendix E GRPO case
+study (`GRPO-OR`/`GRPO-MR`) and its main-results PPO comparison (`PPO`/`MT-PPO`).
 
 ## What this compares
 
@@ -18,20 +20,18 @@ flowchart LR
     Ans == "both conditions:<br/>exact-match + F1 score" ==> Score{{"Reward"}}
 ```
 
-**Outcome reward** only ever scores the final answer — sparse, nothing to learn from until the
-episode ends. **Turn-level reward** is the same scoring *plus* credit for good search behavior
-along the way — denser, more to learn from earlier.
+| Reward | Scores |
+|---|---|
+| Outcome reward | Final answer only — sparse, nothing to learn from until the episode ends |
+| Turn-level reward | Final answer, *plus* a bonus for good search behavior along the way — denser |
 
-That comparison gets tested under two different RL algorithms, not just one — **GRPO** (ranks a
-group of the agent's attempts at one question against each other) and **PPO** (learns a running
-value estimate and nudges the policy toward actions that beat it, turn by turn). If turn-level
-reward wins under both, that's a real finding about reward shaping, not an artifact of one
-algorithm's mechanics.
+That comparison is tested under two different RL algorithms, so a win isn't just an artifact of
+one algorithm's mechanics:
 
-Concretely, this is a simplified reproduction of two ablations from ["Reinforcing Multi-Turn
-Reasoning in LLM Agents via Turn-Level Reward Design"](https://arxiv.org/abs/2505.11821)
-(arXiv:2505.11821): its Appendix E GRPO case study (`GRPO-OR`/`GRPO-MR`), and its main-results PPO
-comparison (`PPO`/`MT-PPO`).
+| Algorithm | Learning signal |
+|---|---|
+| GRPO | Ranks a group of the agent's attempts at one question against each other |
+| PPO | Learns a running value estimate, nudges the policy toward actions that beat it |
 
 ## Results
 
