@@ -1,8 +1,7 @@
 # Outcome vs. Turn-Level Reward for Multi-Turn Search Agents
 
 **Goal**: determine whether rewarding an AI agent's intermediate actions — not just its final
-answer — produces a measurably better multi-turn search agent. To count, the effect must hold up
-on data the model never trained on, and survive a second, independent training run.
+answer — produces a measurably better multi-turn search agent.
 
 A simplified reproduction of ["Reinforcing Multi-Turn Reasoning in LLM Agents via Turn-Level
 Reward Design"](https://arxiv.org/abs/2505.11821) (arXiv:2505.11821) — its Appendix E GRPO case
