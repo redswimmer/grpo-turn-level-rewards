@@ -33,18 +33,6 @@ Reasoning in LLM Agents via Turn-Level Reward Design"](https://arxiv.org/abs/250
 (arXiv:2505.11821): its Appendix E GRPO case study (`GRPO-OR`/`GRPO-MR`), and its main-results PPO
 comparison (`PPO`/`MT-PPO`).
 
-## Key decisions & tradeoffs
-
-| Decision | Why | Tradeoff |
-|---|---|---|
-| Real 21M-passage Wikipedia corpus, not a closed 10-paragraph pool | Closed pool = trivial retrieval, not a real test | Real setup cost (JDK, index, server) |
-| `Qwen3.5-0.8B`, a small model | Fits one GPU, no distributed training | Lower accuracy ceiling than the paper's likely larger model |
-| Search cap of 2, not the paper's 1 | HotpotQA is 2-hop; a 1-cap can't ever fully succeed | Deviates from the paper's exact setup |
-| F1 + EM-bonus reward, not pure binary EM | Avoids zero-gradient rollout groups under GRPO | Deviates from the paper's reward — turned out to matter, see Result 4 |
-| Re-ran at 2x budget, new seed, before trusting the result | First run's finding reversed on held-out data | 2x GPU cost before reporting anything |
-| Added an isolating-control experiment after a fix backfired | Needed to separate cause from correlation | One more full training cycle |
-| `MT-GRPO` (paper's own sharper per-turn credit assignment) — skipped | No supported hook in TRL for a custom per-turn advantage | Tests `GRPO-OR`/`GRPO-MR` only, not the full method |
-
 ## Results
 
 **Status: the GRPO comparison below (outcome reward vs. turn-level reward, Results 1–4) is
@@ -75,22 +63,28 @@ producing a final answer. Three metrics track different things:
   question, what fraction did the agent's searches surface? Only meaningful for turn-level reward,
   since that's the only condition whose reward depends on it.
 
-### 2. Turn-level reward wins — consistent with the source paper's direction, smaller in magnitude
+### 2. Turn-level reward (`GRPO-MR`) wins — consistent with the paper's own `GRPO-OR`/`GRPO-MR` numbers
 
-![Held-out exact match and F1: outcome reward vs. turn-level reward](results/held_out_em_f1_comparison.png)
+![GRPO-OR and GRPO-MR, this repro vs. the paper's own Table 2 numbers](results/held_out_em_f1_comparison.png)
 
-| Metric (held-out) | Outcome reward | Turn-level reward | Source paper's `GRPO-OR` / `GRPO-MR` (Table 2) |
+| Metric (held-out) | `GRPO-OR` / outcome reward (ours) | `GRPO-MR` / turn-level reward (ours, naive*) | Paper's `GRPO-OR` / `GRPO-MR` (Table 2) |
 |---|---|---|---|
 | Exact match | 0.242 | **0.307** | 0.0 / **0.335** |
 | F1 | 0.343 | **0.399** | not reported |
 | Retrieval fraction | n/a | 0.528 | not reported |
 
-**Consistent**: turn-level reward wins in both, same direction as the paper. **Deviates in two
-ways**: our numbers are lower and closer together (smaller model, less data — expected), and
-outcome reward here didn't fully collapse to 0.0 like the paper's did (likely the F1-bonus reward
-choice — see Result 4). One thing that didn't reproduce at all: the paper says outcome reward
-gradually *stops* searching over training; here it searches *more* over time — an open, unexplained
-discrepancy.
+*\*"naive" here is the paper's own term for this mechanism — a reward bonus summed into one
+trajectory-level scalar, still scored by GRPO's standard advantage — as opposed to the paper's
+separate, more sophisticated `MT-GRPO` (a real per-turn advantage), which this repo doesn't
+attempt.*
+
+**Consistent**: turn-level reward wins in both, same direction as the paper — and our 0.307 lands
+close to the paper's own 0.335 winning number. **Deviates in three ways**: our numbers are lower
+overall (smaller model, less data, a 2-search cap vs. the paper's 1 — HotpotQA is 2-hop, so a
+1-search cap can't ever fully succeed); outcome reward here didn't collapse to 0.0 like the
+paper's did (likely the F1-bonus reward choice — see Result 4); and one thing didn't reproduce at
+all — the paper says outcome reward gradually *stops* searching over training, here it searches
+*more* over time, an open, unexplained discrepancy.
 
 <details>
 <summary>Is the EM/F1 win just favorable timing, or does it hold up throughout training?</summary>
@@ -109,9 +103,8 @@ with turn-level reward leading on both.
 
 ### 3. Three quick reward-shaping patches, tested against the working baseline above — all backfired
 
-*("Quick" = first-pass, uncalibrated patches made in one session — not a claim about
-`turn_level`/`GRPO-MR` itself. That naive-vs-sophisticated distinction is the paper's own, for
-`GRPO-MR` vs. its `MT-GRPO`, which this repo doesn't attempt.)*
+*("Quick" = first-pass, uncalibrated patches made in one session — not the "naive" from Result 2
+above, which is a different, paper-specific term.)*
 
 Three attempts to improve on the baseline (0.242 / 0.307 EM). **None worked** — but *how* they
 failed is the lesson:
@@ -158,22 +151,28 @@ more so than under an algorithm with a value function to catch a group sharing o
 ## Project structure
 
 ```
-data/       # downloaded wiki-18 retrieval corpus + BM25 index (gitignored, multi-GB)
-docs/       # phase docs, design specs, roadmap
-outputs/    # training checkpoints + logs per condition (gitignored)
-results/    # final held-out metrics + comparison plots (committed)
-scripts/    # retrieval server, one-off setup/verification, compare_runs.py
-src/        # the turn_level_rewards package (env, rewards, metrics, data, train, evaluate)
-tests/      # unit tests (fast, no GPU, no live retrieval server)
+.
+├── data/       # downloaded wiki-18 retrieval corpus + BM25 index (gitignored, multi-GB)
+├── docs/       # phase docs, design specs, roadmap
+├── outputs/    # training checkpoints + logs per condition (gitignored)
+├── results/    # final held-out metrics + comparison plots (committed)
+├── scripts/    # retrieval server, one-off setup/verification, compare_runs.py
+├── src/        # the turn_level_rewards package (env, rewards, metrics, data, train, evaluate)
+└── tests/      # unit tests (fast, no GPU, no live retrieval server)
 ```
 
-## Reproducing this
+## Getting started
 
 ### Prerequisites
 
 - Python 3.13+
 - [`uv`](https://docs.astral.sh/uv/)
 - JDK 21 (needed by the retrieval server's Lucene bridge)
+
+Two choices worth knowing before you set up: the model is a deliberately small `Qwen3.5-0.8B`
+(fits one GPU, no distributed training), and retrieval hits a real ~21M-passage Wikipedia
+snapshot rather than a small per-question pool (a closed pool would make retrieval trivially
+easy to solve, not a real test).
 
 ```bash
 uv sync
