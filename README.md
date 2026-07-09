@@ -10,10 +10,14 @@ Reward Design"](https://arxiv.org/abs/2505.11821) (arXiv:2505.11821) — its GRP
 ## What this compares
 
 Same agent, same decision loop — at each turn it decides for itself whether to search again or
-answer. Four experiments cross two reward designs with two RL algorithms; this repo has run the
-two GRPO ones so far (see Results).
+answer. Three reward methodologies, in increasing order of sophistication:
 
-**Where the reward attaches — `GRPO-OR` (outcome only) vs. `GRPO-MR` (turn-level):**
+- **`GRPO-OR` — outcome only.** One score, from the final answer alone.
+- **`GRPO-MR` — naive merged (this repo's `turn_level`).** The same final-answer score, *plus* a
+  bonus for good search behavior — but both are summed into one combined number per attempt, so
+  it's still just one score in, one score out.
+- **`MT-GRPO` — true step rewards (the paper's own design; not implemented in this repo).** Each
+  turn gets its *own*, separately-estimated credit, instead of everything folding into one number.
 
 ```mermaid
 flowchart LR
@@ -21,7 +25,7 @@ flowchart LR
     D1 -- search --> S1["Search"]
     S1 --> D1
     D1 -- answer --> A1(["Final answer"])
-    A1 ==> R1{{"GRPO-OR reward:<br/>exact-match + F1"}}
+    A1 ==> R1{{"GRPO-OR:<br/>one score<br/>(exact-match + F1)"}}
 ```
 
 ```mermaid
@@ -31,19 +35,21 @@ flowchart LR
     S2 --> D2
     S2 -.->|"+bonus if real<br/>supporting passage"| R2
     D2 -- answer --> A2(["Final answer"])
-    A2 ==> R2{{"GRPO-MR reward:<br/>exact-match + F1<br/>+ search bonus"}}
+    A2 ==> R2{{"GRPO-MR:<br/>still one combined score<br/>(exact-match + F1 + bonus)"}}
 ```
-
-**How the reward becomes a learning signal — GRPO vs. PPO:**
 
 ```mermaid
 flowchart LR
-    Ep(["Several attempts<br/>at the same question"]) --> G["GRPO:<br/>rank the attempts<br/>against each other"]
-    Ep2(["One attempt"]) --> P["PPO:<br/>compare it to a<br/>learned value estimate"]
+    Q3(["Question"]) --> D3{"Search again,<br/>or answer?"}
+    D3 -- search --> S3["Search"]
+    S3 --> D3
+    S3 -.-> R3a{{"Turn's own credit"}}
+    D3 -- answer --> A3(["Final answer"])
+    A3 -.-> R3b{{"Turn's own credit"}}
 ```
 
-If turn-level reward wins under both algorithms, that's a real finding about reward shaping, not
-an artifact of one algorithm's mechanics.
+This repo runs the first two, under both GRPO and PPO — see Results and Roadmap for what's done
+vs. pending.
 
 ## Results
 
