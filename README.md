@@ -10,11 +10,12 @@ study (`GRPO-OR`/`GRPO-MR`) and its main-results PPO comparison (`PPO`/`MT-PPO`)
 
 ## What this compares
 
-Same agent, same episode — the only thing that changes is *where* the reward attaches:
+Same agent, same run through the question — one attempt is: search up to twice, then answer. The
+only thing that changes is *where* the reward attaches:
 
 ```mermaid
 flowchart LR
-    Q(["Question"]) --> S1["Search"] --> S2["Search"] --> Ans(["Final answer"])
+    Q(["Question"]) --> S1["Search, turn 1"] --> S2["Search, turn 2"] --> Ans(["Final answer"])
     S1 -. "turn-level reward only:<br/>+bonus for a real supporting passage" .-> Score
     S2 -. "turn-level reward only:<br/>+bonus for a real supporting passage" .-> Score
     Ans == "both conditions:<br/>exact-match + F1 score" ==> Score{{"Reward"}}
@@ -22,7 +23,7 @@ flowchart LR
 
 | Reward | Scores |
 |---|---|
-| Outcome reward | Final answer only — sparse, nothing to learn from until the episode ends |
+| Outcome reward | Final answer only — sparse, nothing to learn from until the run ends |
 | Turn-level reward | Final answer, *plus* a bonus for good search behavior along the way — denser |
 
 That comparison is tested under two different RL algorithms, so a win isn't just an artifact of
