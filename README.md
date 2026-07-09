@@ -8,25 +8,25 @@ against a second, independent training run before being reported as a finding.
 
 ## What this compares
 
-This repo trains a multi-turn Wikipedia-search agent under two reward regimes:
+Same agent, same episode — the only thing that changes is *where* the reward attaches:
 
-- **Outcome reward** — the agent is scored only on its final answer's correctness. Sparse: no
-  signal until the very end of the episode.
-- **Turn-level reward** — the same outcome scoring, plus a bonus for surfacing a real
-  supporting-fact passage during search. Denser: the agent gets credit for good intermediate
-  behavior, not just a good final answer.
+```mermaid
+flowchart LR
+    Q(["Question"]) --> S1["Search"] --> S2["Search"] --> Ans(["Final answer"])
+    S1 -. "turn-level reward only:<br/>+bonus for a real supporting passage" .-> Score
+    S2 -. "turn-level reward only:<br/>+bonus for a real supporting passage" .-> Score
+    Ans == "both conditions:<br/>exact-match + F1 score" ==> Score{{"Reward"}}
+```
 
-The interesting question isn't just "does the denser signal help" — it's **whether that holds up
-across genuinely different reinforcement learning algorithms**, not just one. So this repo tests
-the same outcome-vs-turn-level comparison twice:
+**Outcome reward** only ever scores the final answer — sparse, nothing to learn from until the
+episode ends. **Turn-level reward** is the same scoring *plus* credit for good search behavior
+along the way — denser, more to learn from earlier.
 
-- **GRPO** — scores a group of the agent's attempts at the same question against each other,
-  using the ones that did relatively better within the group as the learning signal.
-- **PPO** — learns a running estimate of how good a position is (a value function), and nudges
-  the policy toward actions that beat that estimate, turn by turn.
-
-If turn-level reward helps in the same way under both, that's a real finding about reward shaping
-in multi-turn agent RL, not an artifact of one algorithm's mechanics.
+That comparison gets tested under two different RL algorithms, not just one — **GRPO** (ranks a
+group of the agent's attempts at one question against each other) and **PPO** (learns a running
+value estimate and nudges the policy toward actions that beat it, turn by turn). If turn-level
+reward wins under both, that's a real finding about reward shaping, not an artifact of one
+algorithm's mechanics.
 
 Concretely, this is a simplified reproduction of two ablations from ["Reinforcing Multi-Turn
 Reasoning in LLM Agents via Turn-Level Reward Design"](https://arxiv.org/abs/2505.11821)
@@ -35,15 +35,15 @@ comparison (`PPO`/`MT-PPO`).
 
 ## Key decisions & tradeoffs
 
-| Decision | Why | Tradeoff accepted |
+| Decision | Why | Tradeoff |
 |---|---|---|
-| Real ~21M-passage Wikipedia retrieval corpus, not a closed per-question pool | A closed 10-paragraph pool makes "did the agent search well" a trivial 10-way pick — not a meaningful test of retrieval-driven reward | Real setup cost: a JDK, a ~7.4GB index download, a standalone retrieval server process to keep running |
-| `Qwen3.5-0.8B`, not a larger model | Fits one RTX 4090 with no distributed training or quantization tricks needed | A much lower reachable-accuracy ceiling than the source paper's likely larger model — absolute numbers aren't comparable to theirs, only direction |
-| Search cap of "at most 2" (paper uses "at most 1") | HotpotQA is genuinely 2-hop (avg. 2.00 unique gold supporting facts/question) — a 1-search cap makes it structurally impossible to ever surface both, regardless of policy quality | A deliberate, stated deviation from the paper's exact task setup |
-| Outcome reward uses F1 + an exact-match bonus, not the paper's pure binary exact-match | GRPO's only training signal is variance *within* a group of attempts at one question; an all-0 group (a real risk early in training under a strict binary reward) gives zero gradient to learn from | Not a reproduction of the paper's exact reward — turned out to matter, see Result 4 below |
-| Required a second, symmetric training run before trusting the headline result | The first run's finding reversed direction between training and held-out data — a smaller effect than single-run noise | Real cost: roughly double the GPU time before anything got reported |
-| When a reward-shaping fix made things worse, ran an isolating control instead of concluding directly | The failing experiment bundled two changes into one; without isolating them, "this penalty is bad" would have been a guess, not a finding | Another full training-and-eval cycle, for a result that's now specific and defensible |
-| `MT-GRPO` (the paper's own more sophisticated per-turn credit assignment) — out of scope | TRL's `GRPOTrainer` has no supported hook for a custom per-turn advantage; doing it for real means patching non-public trainer internals, not a documented extension point | This repro tests the paper's `GRPO-OR`/`GRPO-MR` ablation only, not its full method |
+| Real 21M-passage Wikipedia corpus, not a closed 10-paragraph pool | Closed pool = trivial retrieval, not a real test | Real setup cost (JDK, index, server) |
+| `Qwen3.5-0.8B`, a small model | Fits one GPU, no distributed training | Lower accuracy ceiling than the paper's likely larger model |
+| Search cap of 2, not the paper's 1 | HotpotQA is 2-hop; a 1-cap can't ever fully succeed | Deviates from the paper's exact setup |
+| F1 + EM-bonus reward, not pure binary EM | Avoids zero-gradient rollout groups under GRPO | Deviates from the paper's reward — turned out to matter, see Result 4 |
+| Re-ran at 2x budget, new seed, before trusting the result | First run's finding reversed on held-out data | 2x GPU cost before reporting anything |
+| Added an isolating-control experiment after a fix backfired | Needed to separate cause from correlation | One more full training cycle |
+| `MT-GRPO` (paper's own sharper per-turn credit assignment) — skipped | No supported hook in TRL for a custom per-turn advantage | Tests `GRPO-OR`/`GRPO-MR` only, not the full method |
 
 ## Results
 
@@ -85,25 +85,12 @@ producing a final answer. Three metrics track different things:
 | F1 | 0.343 | **0.399** | not reported |
 | Retrieval fraction | n/a | 0.528 | not reported |
 
-**Consistent with the paper**: turn-level reward beats outcome reward in both — the direction the
-paper reports holds up here too. **Deviates in two ways worth being explicit about:**
-
-- *Magnitude.* Our numbers are both lower and closer together than the paper's. This repo uses a
-  far smaller model (0.8B vs. the scale papers like this typically train at) and a fraction of the
-  likely training data — a much lower ceiling on absolute performance is expected, not a red flag.
-- *Outcome reward's total failure didn't reproduce.* The paper's `GRPO-OR` scores a stark **0.0**
-  exact match — total collapse. Ours scores a real, non-trivial 0.242. The most likely reason,
-  documented and deliberate: the paper's outcome reward is pure binary exact-match (1.0 or 0.0,
-  nothing in between), while this repo's adds F1 partial credit specifically because a group of
-  rollouts that all score a flat 0 gives GRPO's relative-ranking signal nothing to learn from —
-  partial credit avoids that trap. So our outcome-only agent actually learns something, where the
-  paper's apparently didn't. This is a genuine, acknowledged difference in setup, not a
-  reproduction of their exact ablation.
-
-**One further mechanism claim from the paper did *not* reproduce**: the paper states `GRPO-OR`
-"gradually stops calling search tools" over training. Here, outcome reward's search-call frequency
-*rises* over training instead of declining — the opposite trend. This is a real, unresolved
-discrepancy (not explained away), independent of the main EM/F1 result above.
+**Consistent**: turn-level reward wins in both, same direction as the paper. **Deviates in two
+ways**: our numbers are lower and closer together (smaller model, less data — expected), and
+outcome reward here didn't fully collapse to 0.0 like the paper's did (likely the F1-bonus reward
+choice — see Result 4). One thing that didn't reproduce at all: the paper says outcome reward
+gradually *stops* searching over training; here it searches *more* over time — an open, unexplained
+discrepancy.
 
 <details>
 <summary>Is the EM/F1 win just favorable timing, or does it hold up throughout training?</summary>
@@ -124,84 +111,46 @@ both runs are in `docs/phase-6-evaluation-comparison.md`.
 
 ### 3. Three quick reward-shaping patches, tested against the working baseline above — all backfired
 
-*("Quick" here means these three patches were first-pass, uncalibrated reward-engineering
-attempts made in one session — not a claim about `turn_level`/`GRPO-MR` itself. That's a separate,
-real distinction the source paper draws in its own ablation ladder — `GRPO-MR` vs. its own,
-more sophisticated `MT-GRPO` — which this repo doesn't attempt; see the Goal section of
-`docs/phase-6-evaluation-comparison.md` for why.)*
+*("Quick" = first-pass, uncalibrated patches made in one session — not a claim about
+`turn_level`/`GRPO-MR` itself. That naive-vs-sophisticated distinction is the paper's own, for
+`GRPO-MR` vs. its `MT-GRPO`, which this repo doesn't attempt.)*
 
-The natural next question: can we push turn-level reward's advantage further, or fix outcome
-reward's remaining weaknesses (like the rising-search-frequency mismatch above), with a bit more
-reward engineering? Three experiments tried, each compared against Result 2's baseline numbers
-(outcome reward 0.242 EM, turn-level reward 0.307 EM). **None worked** — but the *way* they failed
-is the actual lesson here.
+Three attempts to improve on the baseline (0.242 / 0.307 EM). **None worked** — but *how* they
+failed is the lesson:
 
 ![Held-out exact match across all four reward configurations](results/followup_experiments_comparison.png)
 
-- **A length penalty** (discourage long completions, penalizing anything over 2000 characters) —
-  **not from the paper** at all, tried because completions had grown ~4x over training with no
-  accuracy benefit, purely a repo-original experiment. **Outcome reward collapsed** from 0.242 to
-  **0.090 EM**: the model stopped searching and started producing incoherent, garbled text.
-  Turn-level reward dropped more modestly, from 0.307 to **0.254 EM**, and stayed coherent.
-- **The paper's own `R_search = -λ_s · n_search` search-count penalty** (`λ_s = 0.1`) — this *is*
-  a real paper term, but from their separate PPO reward design (Section 5.2/6.1), not their GRPO
-  ablation, which has no such term. Borrowing it into GRPO here is a deliberate cross-algorithm
-  experiment, not a paper reproduction. **Worse for outcome reward still**, down to **0.024 EM**,
-  and this time the final answers were nonsense strings, not just wrong. Turn-level reward dropped
-  to **0.221 EM** — it collapsed too, for about 70% of training, but *recovered* in the final
-  stretch, which outcome reward never did.
-- **A control experiment** — removing the original prompt instruction ("search at most twice")
-  with *no* reward penalty at all — isolated why: outcome reward searched *more*, not less,
-  without that instruction, and dropped only slightly, to **0.201 EM**. Turn-level reward actually
-  ticked *up* to **0.320 EM**, no cost at all. So the two penalty experiments' collapses weren't
-  about losing guidance — they were caused by the penalty itself, isolated cleanly by this control.
+- **Length penalty** (not from the paper — completions had grown 4x with no accuracy gain).
+  Outcome reward **collapsed to 0.090 EM**, garbled text. Turn-level reward dropped to 0.254 EM,
+  stayed coherent.
+- **The paper's own PPO search-count penalty** (`R_search = -λ_s·n_search`, borrowed into GRPO —
+  the GRPO ablation has no such term). Outcome reward **collapsed to 0.024 EM**, nonsense answers.
+  Turn-level reward dropped to 0.221 EM — collapsed too, then *recovered* late in training.
+- **Isolating control**: same prompt-guidance removal, *no* penalty. Outcome reward only dropped
+  to 0.201 EM (searched *more*, not less). Turn-level reward rose to 0.320 EM — no cost. This
+  pins the two collapses above on the penalty term itself, not the missing guidance.
 
-**Why this happens, in plain terms:** GRPO scores a batch of the model's attempts at one question
-purely *relative to each other* — there's no separate "how good is this really" estimate to fall
-back on, the way PPO's value function provides. So if every attempt in a batch stumbles onto the
-same cheap trick — "just guess something, don't bother searching, accept the penalty is smaller
-than the risk of a real answer" — GRPO has no way to see past that shared blind spot. It doesn't
-just fail to punish the trick; it can't even tell the trick happened, because everything in the
-batch looks equally (un)rewarding. Outcome reward's simple two-part scoring (nail the format, get
-the answer right) gave the model nowhere else to go once a penalty made honest effort look risky.
-Turn-level reward's extra signal — credit for good search behavior specifically — gave the model
-something to hold onto even under penalty pressure, which is why it bent instead of breaking.
+**Why**: GRPO scores a group of attempts purely relative to each other, with no value function to
+fall back on. If every attempt in a group finds the same cheap trick (stop searching, just guess),
+GRPO can't see past it — the whole group looks equally bad. Turn-level reward's extra signal gave
+the model something to hold onto instead; outcome reward's plainer signal didn't.
 
-**The takeaway for anyone shaping a reward function under GRPO specifically**: adding a bare
-penalty term without a matching positive incentive pulling toward the behavior you actually want
-is genuinely risky — more risky than the same change might be under an algorithm with a value
-function (like PPO) to catch a whole batch making the same mistake. A denser, more structured
-reward isn't just "more accurate" — it's also more robust to your own future changes.
+**Takeaway**: a bare penalty with no matching positive incentive is genuinely risky under GRPO —
+more so than under an algorithm with a value function to catch a group sharing one mistake.
 
-Full numbers, example completions from the collapses, and the complete methodology are in
-`docs/phase-6-evaluation-comparison.md` — not required reading, everything above is the full
-story.
+Full numbers and example collapsed completions: `docs/phase-6-evaluation-comparison.md`.
 
 ### 4. What this adds beyond reproducing the paper
 
-Three things here aren't in the source paper at all:
-
-- **The isolating control.** The paper never asks "which half of a change caused the failure" —
-  when its own `R_search` penalty is borrowed into GRPO here and both conditions collapse, this
-  repo doesn't stop there. It runs a fourth configuration that removes only the prompt guidance
-  and adds no penalty, cleanly separating two effects that were previously bundled into one
-  experiment. That's what turned "the search-count penalty broke GRPO" into "the *penalty term
-  specifically* broke GRPO, not the missing guidance" — a real methodological addition, not
-  something the paper's own ablations distinguish.
-- **A mechanistic account of *why* GRPO is more fragile to bare penalty terms than PPO.** The
-  paper reports that things fail; it doesn't explain the mechanism the way Result 3 above does —
-  GRPO has no value function to fall back on when an entire batch of attempts shares the same
-  blind spot, so a penalty with no matching positive incentive can make honest effort look
-  strictly worse than a cheap trick, for every attempt in the batch simultaneously. That
-  explanation came from directly reading the model's actual (collapsed) completions at multiple
-  points in training, not from an a priori theory.
-- **A reward-design choice that's arguably more robust at small scale, not just a compromise.**
-  Using F1 partial credit instead of the paper's pure binary exact-match reward isn't only "what
-  we did instead" — it's plausibly *why* this repro's outcome-reward agent learned anything at
-  all (0.242 EM) where the paper's own binary-reward version scored a flat 0.0. A reward that can
-  give partial credit avoids an all-or-nothing group of attempts scoring identically, which is
-  exactly the situation GRPO's relative-ranking signal can't learn from. That's a transferable
-  point for anyone running GRPO at a similarly small scale, not specific to this repo.
+- **The isolating control itself.** The paper never separates "penalty term" from "missing
+  guidance" as two causes — this repo's fourth configuration does, turning a guess into a specific
+  finding.
+- **A mechanism, not just a result.** *Why* GRPO is more fragile to bare penalties than PPO — no
+  value function, so a whole group can share one blind spot — came from reading the model's actual
+  collapsed completions, not from theory.
+- **The F1-bonus reward choice, reframed.** Plausibly not just "what we used instead" but *why*
+  this repro's outcome-only agent learned anything at all, where the paper's binary-reward version
+  scored 0.0 — a transferable point for GRPO at small scale.
 
 ## Roadmap
 
