@@ -10,30 +10,41 @@ Reward Design"](https://arxiv.org/abs/2505.11821) (arXiv:2505.11821) — its GRP
 ## What this compares
 
 Same agent, same decision loop — at each turn it decides for itself whether to search again or
-answer. The only thing that changes is *where* the reward attaches:
+answer. Four experiments cross two reward designs with two RL algorithms; this repo has run the
+two GRPO ones so far (see Results).
+
+**Where the reward attaches — `GRPO-OR` (outcome only) vs. `GRPO-MR` (turn-level, the paper's own
+"naive" merged-reward mechanism):**
 
 ```mermaid
 flowchart LR
-    Q(["Question"]) --> D{"Search again,<br/>or answer?"}
-    D -- "search" --> Se["Search"]
-    Se --> D
-    Se -. "turn-level reward only:<br/>+bonus for a real supporting passage" .-> Score
-    D -- "answer" --> Ans(["Final answer"])
-    Ans == "both conditions:<br/>exact-match + F1 score" ==> Score{{"Reward"}}
+    Q1(["Question"]) --> D1{"Search again,<br/>or answer?"}
+    D1 -- search --> S1["Search"]
+    S1 --> D1
+    D1 -- answer --> A1(["Final answer"])
+    A1 ==> R1{{"GRPO-OR reward:<br/>exact-match + F1"}}
 ```
 
-| Reward | Scores |
-|---|---|
-| Outcome reward | Final answer only — sparse, nothing to learn from until the run ends |
-| Turn-level reward | Final answer, *plus* a bonus for good search behavior along the way — denser |
+```mermaid
+flowchart LR
+    Q2(["Question"]) --> D2{"Search again,<br/>or answer?"}
+    D2 -- search --> S2["Search"]
+    S2 --> D2
+    S2 -.->|"+bonus if real<br/>supporting passage"| R2
+    D2 -- answer --> A2(["Final answer"])
+    A2 ==> R2{{"GRPO-MR reward:<br/>exact-match + F1<br/>+ search bonus"}}
+```
 
-That comparison is tested under two different RL algorithms, so a win isn't just an artifact of
-one algorithm's mechanics:
+**How the reward becomes a learning signal — GRPO vs. PPO:**
 
-| Algorithm | Learning signal |
-|---|---|
-| GRPO | Ranks a group of the agent's attempts at one question against each other |
-| PPO | Learns a running value estimate, nudges the policy toward actions that beat it |
+```mermaid
+flowchart LR
+    Ep(["Several attempts<br/>at the same question"]) --> G["GRPO:<br/>rank the attempts<br/>against each other"]
+    Ep2(["One attempt"]) --> P["PPO:<br/>compare it to a<br/>learned value estimate"]
+```
+
+If turn-level reward wins under both algorithms, that's a real finding about reward shaping, not
+an artifact of one algorithm's mechanics.
 
 ## Results
 
