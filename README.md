@@ -62,12 +62,25 @@ real, evidence-based positive signal for their core claim, not an overclaim off 
 
 One thing that *didn't* resolve: outcome-only reward's search-tool call frequency still rises
 over training instead of falling, the opposite of the paper's claimed mechanism for why
-outcome-only reward underperforms. Two follow-up experiments are testing specific hypotheses
-about the training setup — a length penalty (completions grew ~4x with no accuracy benefit, a
-free-riding side effect nothing in the reward currently discourages) and a search-count penalty
-(replacing the prompt-engineered "at most 2 searches" instruction with a reward-shaped
-constraint, borrowing a mechanism from the paper's separate PPO design — not a GRPO paper
-reproduction, since their GRPO ablation doesn't use this mechanism at all). Results pending.
+outcome-only reward underperforms. Three follow-up experiments investigated this and related
+reward-shaping questions — none improved on the baseline, but all three are informative:
+
+- **A length penalty** (discouraging long completions) collapsed outcome-only reward completely
+  (the model stopped searching and answering coherently) while costing turn-level reward a
+  smaller, real amount of accuracy.
+- **A search-count penalty** (replacing the prompt's "at most 2 searches" instruction with a
+  reward-shaped constraint, borrowing a mechanism from the paper's separate PPO design — not a
+  GRPO reproduction) failed even more severely for outcome-only reward, and cost turn-level reward
+  real accuracy too, though turn-level reward recovered from an initial collapse phase where
+  outcome-only reward never did.
+- **An isolating control** (removing the prompt instruction with *no* reward penalty) confirmed
+  the search-count penalty's failures were caused by the penalty term itself, not by losing the
+  prompt guidance — removing the guidance alone caused a much milder, opposite failure mode
+  (over-searching) for outcome-only reward, and no measurable cost at all for turn-level reward.
+
+Full numbers and the complete analysis are in `docs/phase-6-evaluation-comparison.md`. The
+consistent theme: outcome-only reward's narrow two-term composition is fragile to any added
+penalty; turn-level reward's extra retrieval-based term provides real but incomplete protection.
 
 ## Roadmap
 

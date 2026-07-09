@@ -435,3 +435,172 @@ magnitude/target combination should not be reused as-is. A smaller cap, a softer
 penalty shape, or per-condition tuning would all be reasonable next things to try — none attempted
 here, this experiment's job was to test the hypothesis honestly, not to find a working
 configuration through additional tuning cycles.
+
+---
+
+## `search_count_penalty` results: fails uniformly, worse than `length_penalty`
+
+Both conditions retrained at the seed123/600steps baseline config with `--paper-search-penalty`
+(drops the prompt's "at most 2 searches" instruction *and* adds `-0.1 * n_search` to the reward —
+see the "not paper-fidelity for GRPO" framing earlier in this doc). Real, complete results:
+
+| Metric (held-out) | `outcome_only` baseline → `+search_count_penalty` | `turn_level` baseline → `+search_count_penalty` |
+|---|---|---|
+| Exact match | 0.2418 → **0.0238** | 0.3065 → **0.2205** |
+| F1 | 0.3432 → **0.0908** | 0.3994 → **0.3145** |
+| Tool-call frequency | 1.044 → **0.000** | 2.268 → **1.028** |
+| Retrieval fraction | n/a | 0.5279 → **0.3951** |
+
+**`outcome_only` collapsed even more severely than under `length_penalty`.** Training completions
+show the same "healthy start, degenerate end" shape (step 1: real search queries, e.g. "Nimrod,
+Montana 2010 census population"; by step ~165: zero-search random guesses like "Yasmin Chan",
+"Steven Burstein") — but by the final checkpoint the model wasn't just guessing wrong, it was
+producing genuinely garbled text: nested malformed `<answer>` tags, repeated-token artifacts
+("Records Records", "Joseph Joseph Wu", "Int alphanumeric record label"). Training-time EM
+crashed to near-zero (first-third 0.075 → last-third 0.0005) and never recovered. Held-out
+confirms it fully: `eval_tools/call_frequency=0.0`, EM=0.0238 — the worst result of any experiment
+this session.
+
+**`turn_level` collapsed too, but recovered — and the recovery held on held-out data.** The
+training curve is genuinely three-phase, not a simple decline: healthy for the first ~10% of
+steps, then full collapse (`search_call_count=0.0` sustained for ~70% of training, points 31–240
+of 300), then a real recovery in the final ~20% (search resumed to ~1.0 calls/completion, EM
+climbed to the run's best levels, 0.20–0.34) — coherent, on-topic search queries returned in the
+final checkpoint's completions. Held-out evaluation confirms this wasn't a training-curve
+artifact: EM=0.2205, F1=0.3145, real and far better than `outcome_only`'s collapse — but still a
+genuine, non-trivial cost relative to `turn_level`'s own unpenalized baseline: roughly half the
+search calls (2.268 → 1.028), lower retrieval success (0.528 → 0.395), and real accuracy loss
+(−0.086 EM, −0.085 F1).
+
+**Refined mechanism, sharper than the `length_penalty` hypothesis**: `turn_level`'s apparent
+resilience to `length_penalty` turned out not to be general immunity — `length_penalty` simply
+never triggered for `turn_level` in practice (its completions stayed under the 2000-char target
+throughout). `search_count_penalty` is different: it **directly opposes `turn_reward`'s own
+incentive** (`turn_reward` rewards successful retrieval, which requires searching; this penalty
+punishes searching at all) — a genuine intra-reward conflict, not just an added constraint. That
+conflict is real and costly for `turn_level` (the ~70%-of-training collapse phase proves it), but
+not fatal within a 600-step budget — the combined pull of `outcome_reward` and `turn_reward`
+toward productive search eventually overcame the penalty's "never search" local optimum, something
+`outcome_only` — with no reward term pulling it back toward searching at all — never managed in
+the same budget.
+
+---
+
+## `remove-search-cap-prompt` results: the isolating control, and the answer to "which part broke it"
+
+`search_count_penalty`'s implementation deliberately bundles two changes into one flag
+(`--paper-search-penalty`): dropping the prompt's "at most 2 searches" instruction *and* adding
+the `-0.1 * n_search` reward term. That means the results above cannot, on their own, distinguish
+between two possible causes of collapse — losing the prompt's explicit guidance, or the penalty
+term itself. `--remove-search-cap-prompt` was added specifically to isolate this: it drops the
+same prompt instruction with **no reward penalty at all**, decoupled from
+`--paper-search-penalty` via `build_trainer`'s `search_cap_in_prompt = not (paper_search_penalty
+or remove_search_cap_prompt)` (see commit `6e1fb10`).
+
+| Metric (held-out) | `outcome_only` baseline → `remove-cap-only` | `turn_level` baseline → `remove-cap-only` |
+|---|---|---|
+| Exact match | 0.2418 → **0.2006** | 0.3065 → **0.3199** |
+| F1 | 0.3432 → **0.2923** | 0.3994 → **0.4222** |
+| Tool-call frequency | 1.044 → **1.997** | 2.268 → **2.053** |
+| Retrieval fraction | n/a | 0.5279 → **0.5303** |
+
+Both conditions trained fully healthy — no collapse pattern anywhere in either 600-step run,
+confirmed via trackio's `train/exact_match` curve (steady learning throughout, no flatline) and
+direct completion inspection at multiple points (real, coherent, on-topic search queries in both
+final checkpoints).
+
+**`outcome_only` paid a real but modest cost, in the opposite direction from collapse: it searched
+almost twice as much (1.044 → 1.997 calls/completion) with somewhat lower accuracy (−0.041 EM,
+−0.051 F1).** Without the prompt's explicit count guidance, the model over-searched rather than
+under-searched — training completions show a pattern of short, repetitive, lower-quality queries
+("Forever", "Forge" as separate single-word searches in one completion) rather than search
+avoidance.
+
+**`turn_level` paid no cost at all — if anything, it did slightly better** (EM +0.013, F1 +0.023,
+retrieval_fraction essentially unchanged at 0.530 vs. 0.528). `turn_reward`'s own incentive
+(reward for surfacing real supporting-fact passages) was sufficient on its own to keep search
+behavior effective without any explicit prompt-level count guidance.
+
+**This cleanly answers the question `search_count_penalty` left open: the severe collapses seen
+above were caused specifically by the `-0.1` penalty term, not by losing the prompt's "at most 2
+searches" instruction.** Removing the prompt guidance alone produces a completely different,
+much milder failure mode — unconstrained *over*-searching with a real-but-modest accuracy cost —
+the opposite direction from the penalty-driven collapse to *zero* search. `outcome_only`'s two
+follow-up experiments (`length_penalty`, `search_count_penalty`) both added a term that punished
+some behavior with no accompanying incentive pulling the policy back — and in both cases,
+`outcome_only`'s narrower 2-term reward found the cheapest way to avoid the penalty (echo the
+question, guess randomly, stop searching entirely) rather than the intended trade-off. `turn_level`
+never has this failure mode available to it as cheaply, because `turn_reward` is always actively
+pulling toward the exact behavior (searching, and searching well) that these penalties discourage.
+
+---
+
+## Cross-experiment synthesis: what this session's follow-up work actually established
+
+Three follow-up reward-shaping experiments were run against the `seed123/600steps` baseline for
+both `outcome_only` and `turn_level`. None of them improved on the baseline. All three are
+genuinely informative negative (or negative-with-nuance) results, not a wasted session:
+
+| Experiment | `outcome_only` | `turn_level` |
+|---|---|---|
+| baseline | EM=0.2418, F1=0.3432 | EM=0.3065, F1=0.3994 |
+| `length_penalty` | **collapsed** (EM=0.0901) | mild real cost (EM=0.2538) |
+| `search_count_penalty` | **collapsed** (EM=0.0238) | collapsed-then-recovered, real cost (EM=0.2205) |
+| `remove-search-cap-prompt` (isolating control) | mild real cost (EM=0.2006) | **no cost** (EM=0.3199) |
+
+**`outcome_only`'s narrow 2-term reward (`format_reward` + `outcome_reward`, nothing else) is
+broadly fragile to any added penalty term.** Both `length_penalty` and `search_count_penalty`
+collapsed it completely and durably — in both cases the policy found a cheap, reward-guaranteed
+way to avoid the penalty (shrink to near-nothing; stop searching entirely) rather than learning
+the intended efficient-and-correct trade-off. The one experiment that didn't collapse it
+(`remove-search-cap-prompt`) added no penalty at all — it only removed guidance, which is a
+fundamentally different (and much lower-risk) kind of change.
+
+**`turn_level`'s extra `turn_reward` term provides real, but incomplete, protection.** It never
+suffered `outcome_only`'s complete, durable collapse in either penalty experiment — but it did pay
+a real, measurable accuracy cost in both (`length_penalty`: −0.053 EM; `search_count_penalty`:
+−0.086 EM after a genuine but temporary collapse phase). The likely mechanism, sharpened across
+both experiments: `turn_reward` gives the policy an *independent* pull toward the exact behavior
+(searching, searching well) that these penalties discourage, which is enough to eventually escape
+a penalty-driven local optimum within budget (as `search_count_penalty`'s recovery shows) but not
+enough to avoid paying real cost along the way. Where a penalty doesn't directly oppose an
+existing reward term (`remove-search-cap-prompt`, which added no penalty at all), `turn_level` paid
+no cost whatsoever.
+
+**Practical implication for anyone extending this repo's reward design**: adding a bare penalty
+term to `outcome_only`'s reward composition is high-risk without either (a) an accompanying
+positive term that keeps pulling toward the desired behavior (the way `turn_reward` does for
+`turn_level`), or (b) careful, GRPO-specific coefficient calibration — the two coefficients tested
+here (`length_penalty`'s cap/target, `search_count_penalty`'s `λ_s=0.1` borrowed from the paper's
+PPO context) were both naive ports, never tuned for GRPO's group-relative advantage structure
+specifically, and both broke `outcome_only` as a result.
+
+---
+
+## Infrastructure incidents from this session (documented honestly, not hidden)
+
+Two real infrastructure issues occurred during this session's autonomous overnight run, both
+resolved without loss of any scientific findings:
+
+**Disk-space exhaustion.** Accumulated checkpoint directories from the night's sequence of full
+training runs (each ~27GB, several preserved copies across the symmetric re-run, `length_penalty`,
+and `search_count_penalty` experiments) filled the disk to 100% (1.4GB free), crashing
+`turn_level`'s `search_count_penalty` training mid-checkpoint-save. `uv`'s package cache (78GB)
+could not be reclaimed as a workaround because the long-running retrieval server held a lock on
+it. Resolved by deleting six checkpoint directories whose held-out eval results were already
+safely committed to git (the original seed42/300steps run and the seed123/600steps baseline, both
+conditions each, plus the `length_penalty` checkpoints, both conditions) — **only after explicit,
+specific user authorization**, since this is exactly the kind of consequential, hard-to-reverse
+action that should not be decided autonomously. Freed ~162GB; no scientific findings were lost, as
+every deleted checkpoint's numbers were already in `results/*.json` and this document.
+
+**Unexplained external kill during `turn_level`'s final training run.** The first attempt at
+`turn_level`'s `remove-search-cap-prompt` training was killed externally at 1h34m24s elapsed, with
+no application-level error and a clean systemd resource-accounting exit (consistent with an OOM
+or memory-pressure event after many hours of continuous GPU work, though no kernel-level `dmesg`
+access was available to confirm the exact cause). The run had been healthy throughout, right up
+to the kill. A retry of the identical command succeeded cleanly, running well past the original
+kill point with no recurrence — suggesting a one-off transient issue rather than a systematic
+time- or resource-based limit. No data was lost (the failed attempt had no results to lose;
+checkpoints were being written incrementally and the partial ones were simply overwritten by the
+retry).
