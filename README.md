@@ -16,11 +16,11 @@ answer. Three reward methodologies, in increasing order of sophistication:
 - **`GRPO-MR` — naive merged (this repo's `turn_level`).** The same final-answer score, *plus* a
   bonus for good search behavior — but both are summed into one combined number per attempt, so
   it's still just one score in, one score out.
-- **True step rewards — not implemented in this repo.** Each turn gets its *own*, separately
-  estimated credit, instead of everything folding into one number. The paper proposes two
-  versions of this: `MT-PPO`, its actual main, best-benchmarked method (uses PPO's critic); and
-  `MT-GRPO`, a GRPO-based version the paper itself flags as needing exponentially many rollouts
-  and only tests in a small case study.
+- **Turn-level credit assignment (the paper's own term) — not implemented in this repo.** Each
+  turn gets its *own*, separately estimated credit, instead of everything folding into one
+  number. The paper proposes two versions: `MT-PPO`, its actual main, best-benchmarked method
+  (uses PPO's critic); and `MT-GRPO`, a GRPO-based version the paper itself flags as needing
+  exponentially many rollouts and only tests in a small case study.
 
 **`GRPO-OR`:**
 
@@ -45,7 +45,7 @@ flowchart LR
     A2 ==> R2{{"Still one combined score:<br/>exact-match + F1 + bonus"}}
 ```
 
-**True step rewards (`MT-PPO` / `MT-GRPO`, not implemented here):**
+**Turn-level credit assignment (`MT-PPO` / `MT-GRPO`, not implemented here):**
 
 ```mermaid
 flowchart LR
