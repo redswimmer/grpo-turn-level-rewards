@@ -130,7 +130,7 @@ trained on, using three metrics that track different things:
   question, what fraction did the agent's searches surface? Only tracked for merged reward, since
   that's the only condition whose reward depends on it.
 
-### 1. Merged reward (`GRPO-MR`) wins
+### 1. Merged reward (`GRPO-MR`) outperforms outcome-only reward (`GRPO-OR`)
 
 ![GRPO-OR and GRPO-MR, this repro's held-out results](results/held_out_em_f1_comparison.png)
 
@@ -226,7 +226,7 @@ our own setup to confirm F1 is actually why.
 
 ### Key learnings
 
-1. Merged reward (`GRPO-MR`) beats outcome-only reward (`GRPO-OR`) on our held-out test set
+1. Merged reward (`GRPO-MR`) outperforms outcome-only reward (`GRPO-OR`) on our held-out test set
    (Result 1).
 2. A bare penalty with no matching positive incentive fully and permanently collapsed `GRPO-OR`'s
    policy. `GRPO-MR` was far more resilient to the same penalties, though not fully immune
