@@ -10,17 +10,23 @@ Reward Design"](https://arxiv.org/abs/2505.11821) (arXiv:2505.11821) — its GRP
 ## What this compares
 
 Same agent, same decision loop — at each turn it decides for itself whether to search again or
-answer. Three reward methodologies, in increasing order of sophistication:
+answer. Four reward methodologies from the paper, in increasing order of sophistication. This
+repo implements the first two:
 
-- **`GRPO-OR` — outcome only.** One score, from the final answer alone.
-- **`GRPO-MR` — naive merged (this repo's `turn_level`).** The same final-answer score, *plus* a
-  bonus for good search behavior — but both are summed into one combined number per attempt, so
-  it's still just one score in, one score out.
-- **Turn-level credit assignment (the paper's own term) — not implemented in this repo.** Each
-  turn gets its *own*, separately estimated credit, instead of everything folding into one
-  number. The paper proposes two versions: `MT-PPO`, its actual main, best-benchmarked method
-  (uses PPO's critic); and `MT-GRPO`, a GRPO-based version the paper itself flags as needing
-  exponentially many rollouts and only tests in a small case study.
+- **`GRPO-OR` — outcome only.** One score, from the final answer alone. **Implemented** (this
+  repo's `outcome_only`).
+- **`GRPO-MR` — merged reward.** The same final-answer score, *plus* a bonus for good search
+  behavior — but both are summed into one combined number per attempt, still one score in, one
+  score out (the paper calls this general approach "naive"). **Implemented** (this repo's
+  `turn_level`).
+- **`MT-GRPO` — turn-level credit assignment for GRPO.** Each turn gets its *own*, separately
+  estimated credit instead of folding into one number, via extra rollouts per turn. **Out of
+  scope** — the paper itself flags this as needing exponentially many rollouts, "computationally
+  prohibitive" at scale, and only tests it in a small case study; the training library this repo
+  uses also has no supported hook for it.
+- **`MT-PPO` — turn-level credit assignment for PPO.** Same idea, but via PPO's critic instead of
+  extra rollouts — the paper's actual main, best-benchmarked method. **Planned, not yet built**
+  (see Roadmap) — unlike `MT-GRPO`, this one's on the real roadmap, just not done.
 
 **`GRPO-OR`:**
 
@@ -45,7 +51,7 @@ flowchart LR
     A2 ==> R2{{"Still one combined score:<br/>exact-match + F1 + bonus"}}
 ```
 
-**Turn-level credit assignment (`MT-PPO` / `MT-GRPO`, not implemented here):**
+**Turn-level credit assignment (`MT-GRPO`, out of scope; `MT-PPO`, planned):**
 
 ```mermaid
 flowchart LR
