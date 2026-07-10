@@ -39,7 +39,12 @@ GRPO's baseline design can't use an intermediate signal even if you hand it one:
 advantage per trajectory (Eq. 4 in the paper) and applies that identical value to every token in
 every turn. A sharp search followed by a garbled answer, and a lazy search followed by a lucky
 guess get scored no differently turn-by-turn — GRPO can't isolate which turn actually earned the
-credit.
+credit. That's true no matter *where* in the trajectory you attach a bonus reward — GRPO only
+ever sees one number per trajectory, so a bonus placed mid-episode still just gets folded into
+that same number by the time training sees it. Actually using *where* a reward happened requires
+a critic that can evaluate any point in a trajectory on its own — which is what PPO has and GRPO
+doesn't, and why the last two approaches below switch algorithms instead of just rearranging the
+reward within GRPO.
 
 This repo compares four ways to address it, in increasing order of how directly they solve it:
 
@@ -90,6 +95,7 @@ flowchart LR
     S3 --> D3
     D3 -- answer --> A3(["Final answer"])
     A3 ==> R3{{"One score:<br/>exact-match + F1"}}
+    R3 -.->|"critic estimates value<br/>token-by-token (GAE)"| C3(("Critic"))
 ```
 
 ### Turn-Level Credit Assignment (MT-PPO)
@@ -99,9 +105,9 @@ flowchart LR
     Q4(["Question"]) --> D4{"Search again,<br/>or answer?"}
     D4 -- search --> S4["Search"]
     S4 --> D4
-    S4 -.-> R4a{{"Search turn's<br/>own credit"}}
+    S4 -.->|"+bonus if real<br/>supporting passage"| R4a{{"Search turn's<br/>own credit"}}
     D4 -- answer --> A4(["Final answer"])
-    A4 -.-> R4b{{"Answer turn's<br/>own credit"}}
+    A4 ==> R4b{{"Answer turn's own credit:<br/>exact-match + F1"}}
     R4b -.->|"critic sends credit<br/>backward (GAE)"| R4a
 ```
 
@@ -114,6 +120,8 @@ flowchart LR
 2. GRPO is more fragile to careless reward-shaping than it looks going in: with no value function
    to fall back on, a whole batch of attempts can share one blind spot and collapse together
    (Result 3).
+3. We spotted a specific collapse mode in the paper's own baseline before ever training, and
+   adapted this repo's reward around it (Result 4).
 
 ### 1. What's actually being measured
 
@@ -123,11 +131,14 @@ producing a final answer. Three metrics track different things:
 
 - **Exact match (EM)** — did the agent's final answer literally match an accepted answer string?
   Strict: "Barack Obama" ≠ "Obama."
-- **F1** — word-overlap partial credit (the standard SQuAD-style scoring paper QA benchmarks use)
-  for answers that are close but not verbatim.
+- **F1** — the standard SQuAD-style score QA benchmarks use: the harmonic mean of word-level
+  precision and recall between the predicted and gold answer, giving partial credit for answers
+  that are close but not verbatim.
 - **Retrieval fraction** — of the real supporting-fact passages actually needed to answer the
-  question, what fraction did the agent's searches surface? Only meaningful for merged reward,
-  since that's the only condition whose reward depends on it.
+  question, what fraction did the agent's searches surface? Only tracked for merged reward, since
+  that's the only condition whose reward depends on it. Its ceiling isn't 1.0: about 20% of
+  HotpotQA's gold passage titles simply aren't in this repo's Wikipedia snapshot (confirmed by
+  directly scanning it — see CLAUDE.md), so even perfect retrieval tops out around ~0.80.
 
 ### 2. Merged reward (`GRPO-MR`) wins
 
@@ -137,13 +148,21 @@ producing a final answer. Three metrics track different things:
 |---|---|---|
 | Exact match | 0.242 | **0.307** |
 | F1 | 0.343 | **0.399** |
-| Retrieval fraction | n/a | 0.528 |
 
 *\*"naive" is the paper's own term for this mechanism: a reward bonus summed into one
 trajectory-level scalar, scored by GRPO's standard advantage.*
 
-Open question: under outcome-only reward, this agent searches *more* over training, not less —
-surprising, since nothing in the reward rewards extra searching. Unexplained so far.
+`GRPO-OR` has no retrieval_fraction to compare against — its reward never looks at search
+quality — so the only meaningful comparison for `GRPO-MR`'s retrieval_fraction is against itself
+over time. It climbed steadily over training, closing in on the corpus's own ~80% ceiling:
+
+![GRPO-MR's retrieval_fraction rising over training, against the corpus ceiling](results/retrieval_fraction_trend.png)
+
+Search behavior tells its own story too, and it's still unexplained: under outcome-only reward,
+this agent searches *more* over training, not less — surprising, since nothing in the reward
+rewards extra searching.
+
+![Search calls per completion over training, both conditions](results/tool_call_frequency.png)
 
 <details>
 <summary>Is the EM/F1 win just favorable timing, or does it hold up throughout training?</summary>
@@ -185,15 +204,16 @@ the model something to hold onto instead; outcome reward's plainer signal didn't
 **Takeaway**: a bare penalty with no matching positive incentive is genuinely risky under GRPO —
 more so than under an algorithm with a value function to catch a group sharing one mistake.
 
-### 4. A fix for a shortcoming the paper's own numbers show
+### 4. We spotted a shortcoming in the paper's approach, and adapted around it
 
 The paper's own outcome-only baseline (binary exact-match, no partial credit) collapsed to 0.0 in
-its GRPO case study. That's expected: GRPO has no critic to fall back on, so a group where every
-rollout scores identically — plausible early in training, when nothing's right yet — gives it zero
-gradient to learn from. This repo's outcome-only reward uses F1 partial credit instead, precisely
-to avoid that: even when nobody in a group is exactly right, F1 still gives the group non-identical
-scores to differentiate by. This repro's outcome-only agent did keep learning rather than
-collapsing — consistent with the fix working, though we haven't run a binary-EM-only ablation on
+its GRPO case study. We caught why before ever training a single step: GRPO has no critic to fall
+back on, so a group where every rollout scores identically — plausible early in training, when
+nothing's right yet — gives it zero gradient to learn from. So this repo's outcome-only reward
+uses F1 partial credit instead: even when nobody in a group is exactly right, F1 still gives the
+group non-identical scores to differentiate by. This repro's outcome-only agent did keep learning
+rather than collapsing — consistent with the adaptation working, though we haven't run a
+binary-EM-only ablation on
 our own setup to confirm F1 is actually why.
 
 ## Roadmap
