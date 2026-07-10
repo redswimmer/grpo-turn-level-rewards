@@ -24,7 +24,7 @@ answer.
   critic, instead of folding everything into one number — the paper's best-performing method.
   **Planned, not yet built** (see Roadmap).
 
-**`GRPO-OR`:**
+### Outcome Reward (GRPO-OR)
 
 ```mermaid
 flowchart LR
@@ -35,7 +35,7 @@ flowchart LR
     A1 ==> R1{{"One score:<br/>exact-match + F1"}}
 ```
 
-**`GRPO-MR` (this repo's `turn_level`):**
+### Merged Reward (GRPO-MR)
 
 ```mermaid
 flowchart LR
@@ -47,7 +47,7 @@ flowchart LR
     A2 ==> R2{{"Still one combined score:<br/>exact-match + F1 + bonus"}}
 ```
 
-**Turn-level credit assignment (`MT-PPO`, planned):**
+### Turn-Level Credit Assignment (MT-PPO)
 
 ```mermaid
 flowchart LR
