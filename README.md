@@ -3,6 +3,14 @@
 **Goal**: determine whether rewarding an AI agent's intermediate actions — not just its final
 answer — produces a measurably better multi-turn search agent.
 
+**Why this matters.** RL algorithms like GRPO and PPO are the standard way to train multi-turn LLM
+agents, but they're usually trained on sparse outcome rewards — one number, right or wrong, at the
+very end of a long trajectory. That gives the agent no signal about which of its intermediate
+actions (like a good search) actually helped. The paper this repo is inspired by found that adding
+a dense, turn-level reward signal on top of the same algorithms fixes that: more stable training,
+faster convergence, and higher accuracy than sparse-reward baselines. This repo tests whether that
+holds up in a much smaller, single-GPU reproduction.
+
 Inspired by ["Reinforcing Multi-Turn Reasoning in LLM Agents via Turn-Level Reward
 Design"](https://arxiv.org/abs/2505.11821) (arXiv:2505.11821), specifically its GRPO and PPO case study
  — not a strict reproduction. Biggest differences: a much smaller model
@@ -12,15 +20,33 @@ softer search-turn cap (2 vs. their hard 1). Smaller deviations are noted inline
 ## What this compares
 
 Same agent, same decision loop — at each turn it decides for itself whether to search again or
-answer.
+answer, so different rollouts of the same question can search a different number of times.
 
-- **`GRPO-OR` — outcome only.** One score, from the final answer alone. **Implemented**
-- **`GRPO-MR` — merged reward.** The same final-answer score, *plus* a bonus for good search
-  behavior — but both are summed into one combined number per attempt, still one score in, one
-  score out (the paper calls this general approach "naive"). **Implemented**
-- **`MT-PPO` — turn-level credit assignment for PPO.** Each turn gets its *own* credit via PPO's
-  critic, instead of folding everything into one number — the paper's best-performing method.
-  **Coming soon**
+GRPO's baseline design can't use an intermediate signal even if you hand it one: it computes one
+advantage per trajectory (Eq. 4 in the paper) and applies that identical value to every token in
+every turn. A sharp search followed by a garbled answer, and a lazy search followed by a lucky
+guess get scored no differently turn-by-turn — GRPO can't isolate which turn actually earned the
+credit.
+
+The paper explores four ways to address this, in increasing order of how directly they solve it:
+
+- **`GRPO-OR` — outcome only.** Reward = final-answer correctness, nothing else. Simplest
+  baseline; search behavior gets no direct training signal at all. **Implemented**
+- **`GRPO-MR` — merged reward** (the paper's own term for this approach is "naive"). Adds a bonus
+  for good search behavior — but folds it into the *same* one trajectory-level number GRPO already
+  scores. Denser reward, but the advantage is still spread uniformly across every token; GRPO still
+  can't tell which turn helped. **Implemented**
+- **`MT-GRPO` — real turn-level credit assignment for GRPO.** Computes a genuinely separate
+  advantage per turn (not just a denser reward) by sampling an extra group of rollouts at each
+  turn. This actually solves the problem above — but the paper's own stated limitations rule it out
+  here: cost grows exponentially with the number of turns, and every rollout in a sampled group
+  must take the *same fixed number of turns* (enforced via the prompt). This agent's search count
+  varies per rollout by design, so that constraint doesn't fit. **Not implemented, not on this
+  repo's roadmap**
+- **`MT-PPO` — turn-level reward with a critic, not extra rollouts.** PPO's critic already
+  estimates value token-by-token (GAE), so placing a reward at each turn boundary lets credit flow
+  backward through the trajectory automatically — no exponential rollout cost, no fixed-turn
+  requirement. The paper's best-performing method. **Coming soon**
 
 ### Outcome Only Reward (GRPO-OR)
 
@@ -156,8 +182,10 @@ our own setup to confirm F1 is actually why.
   merged reward (see Results above). Three follow-up reward-design experiments are complete
   (see Results above); Phase 6 is fully done.
 - **PPO: outcome-only vs. merged-reward** — design complete; not yet started.
-- **LLM-as-judge reward** (an alternative to exact-match/F1 scoring, explored on top of the PPO
-  comparison) — not yet started.
+- **LLM-as-judge reward** — the paper studies two kinds of turn-level reward: *verifiable* (this
+  repo's `turn_reward`, an objective check on whether a real supporting passage got surfaced) and
+  *LLM-as-judge* (a model scores the turn instead). The judge variant, explored on top of the PPO
+  comparison — not yet started.
 
 ## Project structure
 
