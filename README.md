@@ -12,8 +12,7 @@ softer search-turn cap (2 vs. their hard 1). Smaller deviations are noted inline
 ## What this compares
 
 Same agent, same decision loop — at each turn it decides for itself whether to search again or
-answer. Four reward methodologies from the paper, in increasing order of sophistication. This
-repo implements the first two:
+answer.
 
 - **`GRPO-OR` — outcome only.** One score, from the final answer alone. **Implemented** (this
   repo's `outcome_only`).
@@ -21,11 +20,9 @@ repo implements the first two:
   behavior — but both are summed into one combined number per attempt, still one score in, one
   score out (the paper calls this general approach "naive"). **Implemented** (this repo's
   `turn_level`).
-- **`MT-GRPO` — turn-level credit assignment for GRPO.** Each turn gets its *own*, separately
-  estimated credit instead of folding into one number, via extra rollouts per turn. **Out of
-  scope** — exponentially expensive, and the training library this repo uses has no hook for it.
-- **`MT-PPO` — turn-level credit assignment for PPO.** Same idea, via PPO's critic instead of
-  extra rollouts — the paper's best-performing method. **Planned, not yet built** (see Roadmap).
+- **`MT-PPO` — turn-level credit assignment for PPO.** Each turn gets its *own* credit via PPO's
+  critic, instead of folding everything into one number — the paper's best-performing method.
+  **Planned, not yet built** (see Roadmap).
 
 **`GRPO-OR`:**
 
@@ -50,7 +47,7 @@ flowchart LR
     A2 ==> R2{{"Still one combined score:<br/>exact-match + F1 + bonus"}}
 ```
 
-**Turn-level credit assignment (`MT-GRPO`, out of scope; `MT-PPO`, planned):**
+**Turn-level credit assignment (`MT-PPO`, planned):**
 
 ```mermaid
 flowchart LR
