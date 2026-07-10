@@ -5,7 +5,7 @@ answer — produces a measurably better multi-turn search agent.
 
 A simplified reproduction of ["Reinforcing Multi-Turn Reasoning in LLM Agents via Turn-Level
 Reward Design"](https://arxiv.org/abs/2505.11821) (arXiv:2505.11821) — its GRPO case study
-(`GRPO-OR`/`GRPO-MR`) and its main-results PPO comparison (`PPO`/`MT-PPO`).
+(`GRPO-OR`/`GRPO-MR`) and its main-results PPO comparison (`PPO-OR`/`PPO-MR`).
 
 ## What this compares
 
