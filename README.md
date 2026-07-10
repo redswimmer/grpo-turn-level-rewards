@@ -5,7 +5,8 @@ answer — produces a measurably better multi-turn search agent.
 
 A simplified reproduction of ["Reinforcing Multi-Turn Reasoning in LLM Agents via Turn-Level
 Reward Design"](https://arxiv.org/abs/2505.11821) (arXiv:2505.11821) — its GRPO case study
-(`GRPO-OR`/`GRPO-MR`) and its main-results PPO comparison (`PPO-OR`/`PPO-MR`).
+(`GRPO-OR`/`GRPO-MR`). The paper's main-results PPO comparison (`PPO-OR`/`PPO-MR`) is designed
+as a follow-on (see Roadmap) but hasn't been run yet — nothing PPO-related is done here yet.
 
 ## What this compares
 
@@ -63,8 +64,9 @@ flowchart LR
     A3 -.-> R3b{{"This turn's own credit"}}
 ```
 
-This repo runs the first two, under both GRPO and PPO — see Results and Roadmap for what's done
-vs. pending.
+This repo implements the first two under GRPO (`GRPO-OR`/`GRPO-MR`) — both complete, see Results
+below. The same two reward methodologies under PPO (`PPO-OR`/`PPO-MR`) are designed but not yet
+run — see Roadmap.
 
 ## Results
 
@@ -96,29 +98,21 @@ producing a final answer. Three metrics track different things:
   question, what fraction did the agent's searches surface? Only meaningful for turn-level reward,
   since that's the only condition whose reward depends on it.
 
-### 2. Turn-level reward (`GRPO-MR`) wins — consistent with the paper's own `GRPO-OR`/`GRPO-MR` numbers
+### 2. Turn-level reward (`GRPO-MR`) wins
 
-![GRPO-OR and GRPO-MR, this repro vs. the paper's own Table 2 numbers](results/held_out_em_f1_comparison.png)
+![GRPO-OR and GRPO-MR, this repro's held-out results](results/held_out_em_f1_comparison.png)
 
-| Metric (held-out) | `GRPO-OR` / outcome reward (ours) | `GRPO-MR` / turn-level reward (ours, naive*) | Paper's `GRPO-OR` / `GRPO-MR` (Table 2) |
-|---|---|---|---|
-| Exact match | 0.242 | **0.307** | 0.0 / **0.335** |
-| F1 | 0.343 | **0.399** | not reported |
-| Retrieval fraction | n/a | 0.528 | not reported |
+| Metric (held-out) | `GRPO-OR` / outcome reward | `GRPO-MR` / turn-level reward (naive*) |
+|---|---|---|
+| Exact match | 0.242 | **0.307** |
+| F1 | 0.343 | **0.399** |
+| Retrieval fraction | n/a | 0.528 |
 
-*\*"naive" here is the paper's own term for this mechanism — a reward bonus summed into one
-trajectory-level scalar, still scored by GRPO's standard advantage — as opposed to the paper's
-separate, more sophisticated `MT-GRPO` (a real per-turn advantage), which this repo doesn't
-attempt.*
+*\*"naive" is the paper's own term for this mechanism: a reward bonus summed into one
+trajectory-level scalar, scored by GRPO's standard advantage.*
 
-**Consistent**: turn-level reward wins in both, same direction as the paper — and our 0.307 lands
-close to the paper's own 0.335 winning number. **Deviates in three ways**: our numbers are lower
-overall (smaller model, less data, and the agent here is only encouraged toward at most 2 searches
-rather than hard-limited to the paper's exactly 1 — HotpotQA is 2-hop, so a hard 1-search limit
-can't ever fully succeed); outcome reward here didn't collapse to 0.0 like the paper's did (likely
-the F1-bonus reward choice — see Result 4); and one thing didn't reproduce at all — the paper says
-outcome reward gradually *stops* searching over training, here it searches *more* over time, an
-open, unexplained discrepancy.
+Open question: under outcome-only reward, this agent searches *more* over training, not less —
+surprising, since nothing in the reward rewards extra searching. Unexplained so far.
 
 <details>
 <summary>Is the EM/F1 win just favorable timing, or does it hold up throughout training?</summary>
@@ -137,11 +131,8 @@ with turn-level reward leading on both.
 
 ### 3. Three quick reward-shaping patches, tested against the working baseline above — all backfired
 
-*("Quick" = first-pass, uncalibrated patches made in one session — not the "naive" from Result 2
-above, which is a different, paper-specific term.)*
-
-Three attempts to improve on the baseline (0.242 / 0.307 EM). **None worked** — but *how* they
-failed is the lesson:
+Three ad-hoc, uncalibrated attempts to improve on the baseline above (0.242 / 0.307 EM), each
+tried in one session. **None worked** — but *how* they failed is the lesson:
 
 ![Held-out exact match across all four reward configurations](results/followup_experiments_comparison.png)
 
