@@ -33,7 +33,7 @@ flowchart LR
     D -- answer --> A(["Final answer"])
 ```
 
-## What this compares
+## Reward approaches explored
 
 GRPO's baseline design can't use an intermediate signal even if you hand it one: it computes one
 advantage per trajectory (Eq. 4 in the paper) and applies that identical value to every token in
@@ -41,7 +41,7 @@ every turn. A sharp search followed by a garbled answer, and a lazy search follo
 guess get scored no differently turn-by-turn — GRPO can't isolate which turn actually earned the
 credit.
 
-The paper explores four ways to address this, in increasing order of how directly they solve it:
+This repo compares four ways to address it, in increasing order of how directly they solve it:
 
 - **`GRPO-OR` — outcome only.** Reward = final-answer correctness, nothing else. Simplest
   baseline; search behavior gets no direct training signal at all. **Implemented**
@@ -49,16 +49,13 @@ The paper explores four ways to address this, in increasing order of how directl
   for good search behavior — but folds it into the *same* one trajectory-level number GRPO already
   scores. Denser reward, but the advantage is still spread uniformly across every token; GRPO still
   can't tell which turn helped. **Implemented**
-- **`MT-GRPO` — real turn-level credit assignment for GRPO.** Computes a genuinely separate
-  advantage per turn (not just a denser reward) by sampling an extra group of rollouts at each
-  turn. This actually solves the problem above — but the paper's own stated limitations rule it out
-  here: cost grows exponentially with the number of turns, and every rollout in a sampled group
-  must take the *same fixed number of turns* (enforced via the prompt). This agent's search count
-  varies per rollout by design, so that constraint doesn't fit. **Not implemented, not on this
-  repo's roadmap**
-- **`MT-PPO` — turn-level reward with a critic, not extra rollouts.** PPO's critic already
-  estimates value token-by-token (GAE), so placing a reward at each turn boundary lets credit flow
-  backward through the trajectory automatically — no exponential rollout cost, no fixed-turn
+- **`PPO-OR` — the same outcome-only reward as `GRPO-OR`, scored by a critic instead.** Same
+  reward, different algorithm: no group comparison, just a learned value function estimating
+  expected return. This repo's baseline for the comparison below. **Coming soon**
+- **`MT-PPO` — turn-level reward with a critic, not extra rollouts.** Same setup as `PPO-OR`, but
+  adds a bonus for good search behavior and places it at the turn it was earned instead of dumping
+  it at the end — PPO's critic already estimates value token-by-token (GAE), so credit flows
+  backward through the trajectory automatically. No exponential rollout cost, no fixed-turn
   requirement. The paper's best-performing method. **Coming soon**
 
 ### Outcome Only Reward (GRPO-OR)
@@ -84,17 +81,28 @@ flowchart LR
     A2 ==> R2{{"Still one combined score:<br/>exact-match + F1 + bonus"}}
 ```
 
-### Turn-Level Credit Assignment (MT-PPO)
+### Outcome Only Reward, with a Critic (PPO-OR)
 
 ```mermaid
 flowchart LR
     Q3(["Question"]) --> D3{"Search again,<br/>or answer?"}
     D3 -- search --> S3["Search"]
     S3 --> D3
-    S3 -.-> R3a{{"Search turn's<br/>own credit"}}
     D3 -- answer --> A3(["Final answer"])
-    A3 -.-> R3b{{"Answer turn's<br/>own credit"}}
-    R3b -.->|"critic sends credit<br/>backward (GAE)"| R3a
+    A3 ==> R3{{"One score:<br/>exact-match + F1"}}
+```
+
+### Turn-Level Credit Assignment (MT-PPO)
+
+```mermaid
+flowchart LR
+    Q4(["Question"]) --> D4{"Search again,<br/>or answer?"}
+    D4 -- search --> S4["Search"]
+    S4 --> D4
+    S4 -.-> R4a{{"Search turn's<br/>own credit"}}
+    D4 -- answer --> A4(["Final answer"])
+    A4 -.-> R4b{{"Answer turn's<br/>own credit"}}
+    R4b -.->|"critic sends credit<br/>backward (GAE)"| R4a
 ```
 
 ## Results
