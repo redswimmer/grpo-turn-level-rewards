@@ -25,6 +25,14 @@ searching a different number of times. Every condition below trains that identic
 decision loop; only the reward function changes, so any difference in results comes from the
 reward design, not the architecture.
 
+```mermaid
+flowchart LR
+    Q(["Question"]) --> D{"Search again,<br/>or answer?"}
+    D -- search --> S["Search Wikipedia"]
+    S --> D
+    D -- answer --> A(["Final answer"])
+```
+
 GRPO's baseline design can't use an intermediate signal even if you hand it one: it computes one
 advantage per trajectory (Eq. 4 in the paper) and applies that identical value to every token in
 every turn. A sharp search followed by a garbled answer, and a lazy search followed by a lucky
