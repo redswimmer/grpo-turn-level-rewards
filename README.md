@@ -117,23 +117,7 @@ flowchart LR
 
 Both reward approaches above — outcome-only reward (`GRPO-OR`) and merged reward (`GRPO-MR`) —
 were trained on HotpotQA and evaluated on a 7,404-question held-out test set neither one ever
-trained on.
-
-**Key learnings:**
-1. Merged reward (`GRPO-MR`) beats outcome-only reward (`GRPO-OR`) on our held-out test set
-   (Result 2).
-2. A bare penalty with no matching positive incentive fully and permanently collapsed `GRPO-OR`'s
-   policy. `GRPO-MR` was far more resilient to the same penalties, though not fully immune
-   (Result 3).
-3. We identified why the paper's own outcome-only baseline collapsed to 0.0 (GRPO has no critic,
-   so zero-gradient rollout groups give it nothing to learn from) and designed this repo's reward
-   to avoid that failure mode — our outcome-only condition never collapsed (Result 4).
-
-### 1. What's actually being measured
-
-The agent answers multi-hop trivia questions (from HotpotQA's validation split — 7,404 questions
-neither reward condition ever trained on) by searching a real ~21M-passage Wikipedia snapshot and
-producing a final answer. Three metrics track different things:
+trained on, using three metrics that track different things:
 
 - **Exact match (EM)** — did the agent's final answer literally match an accepted answer string?
   Strict: "Barack Obama" ≠ "Obama."
@@ -142,11 +126,12 @@ producing a final answer. Three metrics track different things:
   that are close but not verbatim.
 - **Retrieval fraction** — of the real supporting-fact passages actually needed to answer the
   question, what fraction did the agent's searches surface? Only tracked for merged reward, since
-  that's the only condition whose reward depends on it. Its ceiling isn't 1.0: about 20% of
-  HotpotQA's gold passage titles simply aren't in this repo's Wikipedia snapshot (confirmed by
-  directly scanning it — see CLAUDE.md), so even perfect retrieval tops out around ~0.80.
+  that's the only condition whose reward depends on it — shown below as a training trend, not a
+  single number. Its ceiling isn't 1.0: about 20% of HotpotQA's gold passage titles simply aren't
+  in this repo's Wikipedia snapshot (confirmed by directly scanning it — see CLAUDE.md), so even
+  perfect retrieval tops out around ~0.80.
 
-### 2. Merged reward (`GRPO-MR`) wins
+### 1. Merged reward (`GRPO-MR`) wins
 
 ![GRPO-OR and GRPO-MR, this repro's held-out results](results/held_out_em_f1_comparison.png)
 
@@ -201,7 +186,7 @@ step-to-step, as GRPO reward inherently is — smoothing is only for readability
 underlying result.)
 </details>
 
-### 3. Three quick reward-shaping patches, tested against the working baseline above — all backfired
+### 2. Three quick reward-shaping patches, tested against the working baseline above — all backfired
 
 Three ad-hoc, uncalibrated attempts to improve on the baseline above (0.242 / 0.307 EM), each
 tried in one session. **None worked** — but *how* they failed is the lesson:
@@ -226,7 +211,7 @@ the model something to hold onto instead; outcome reward's plainer signal didn't
 **Takeaway**: a bare penalty with no matching positive incentive is genuinely risky under GRPO —
 more so than under an algorithm with a value function to catch a group sharing one mistake.
 
-### 4. We spotted a shortcoming in the paper's approach, and adapted around it
+### 3. We spotted a shortcoming in the paper's approach, and adapted around it
 
 The paper's own outcome-only baseline (binary exact-match, no partial credit) collapsed to 0.0 in
 its GRPO case study. We caught why before ever training a single step: GRPO has no critic to fall
@@ -237,6 +222,17 @@ group non-identical scores to differentiate by. This repro's outcome-only agent 
 rather than collapsing — consistent with the adaptation working, though we haven't run a
 binary-EM-only ablation on
 our own setup to confirm F1 is actually why.
+
+### Key learnings
+
+1. Merged reward (`GRPO-MR`) beats outcome-only reward (`GRPO-OR`) on our held-out test set
+   (Result 1).
+2. A bare penalty with no matching positive incentive fully and permanently collapsed `GRPO-OR`'s
+   policy. `GRPO-MR` was far more resilient to the same penalties, though not fully immune
+   (Result 2).
+3. We identified why the paper's own outcome-only baseline collapsed to 0.0 (GRPO has no critic,
+   so zero-gradient rollout groups give it nothing to learn from) and designed this repo's reward
+   to avoid that failure mode — our outcome-only condition never collapsed (Result 3).
 
 ## Roadmap
 
