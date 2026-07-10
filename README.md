@@ -115,6 +115,8 @@ flowchart LR
 
 *(GRPO only — PPO coming soon)*
 
+### What's being measured
+
 Both reward approaches above — outcome-only reward (`GRPO-OR`) and merged reward (`GRPO-MR`) —
 were trained on HotpotQA and evaluated on a 7,404-question held-out test set neither one ever
 trained on, using three metrics that track different things:
@@ -126,10 +128,7 @@ trained on, using three metrics that track different things:
   that are close but not verbatim.
 - **Retrieval fraction** — of the real supporting-fact passages actually needed to answer the
   question, what fraction did the agent's searches surface? Only tracked for merged reward, since
-  that's the only condition whose reward depends on it — shown below as a training trend, not a
-  single number. Its ceiling isn't 1.0: about 20% of HotpotQA's gold passage titles simply aren't
-  in this repo's Wikipedia snapshot (confirmed by directly scanning it — see CLAUDE.md), so even
-  perfect retrieval tops out around ~0.80.
+  that's the only condition whose reward depends on it.
 
 ### 1. Merged reward (`GRPO-MR`) wins
 
@@ -145,7 +144,9 @@ trajectory-level scalar, scored by GRPO's standard advantage.*
 
 `GRPO-OR` has no retrieval_fraction to compare against — its reward never looks at search
 quality — so the only meaningful comparison for `GRPO-MR`'s retrieval_fraction is against itself
-over time. It climbed steadily over training, closing in on the corpus's own ~80% ceiling:
+over time. It climbed steadily over training, closing in on the corpus's own ~80% ceiling (about
+20% of HotpotQA's gold passage titles simply aren't in this repo's Wikipedia snapshot, so even
+perfect retrieval can't reach 1.0):
 
 ![GRPO-MR's retrieval_fraction rising over training, against the corpus ceiling](results/retrieval_fraction_trend.png)
 
