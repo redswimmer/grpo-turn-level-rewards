@@ -52,12 +52,15 @@ flowchart LR
     Q3(["Question"]) --> D3{"Search again,<br/>or answer?"}
     D3 -- search --> S3["Search"]
     S3 --> D3
-    S3 -.-> R3a{{"This turn's own credit"}}
+    S3 -.-> R3a{{"Search turn's<br/>own credit"}}
     D3 -- answer --> A3(["Final answer"])
-    A3 -.-> R3b{{"This turn's own credit"}}
+    A3 -.-> R3b{{"Answer turn's<br/>own credit"}}
+    R3b -.->|"critic sends credit<br/>backward (GAE)"| R3a
 ```
 
 ## Results
+
+*(GRPO only — PPO coming soon)*
 
 **Key learnings:**
 1. Merged reward wins — confirmed across two independent runs (Result 2).
@@ -135,10 +138,16 @@ the model something to hold onto instead; outcome reward's plainer signal didn't
 **Takeaway**: a bare penalty with no matching positive incentive is genuinely risky under GRPO —
 more so than under an algorithm with a value function to catch a group sharing one mistake.
 
-### 4. One more hypothesis, not yet confirmed
+### 4. A fix for a shortcoming the paper's own numbers show
 
-F1 partial credit (vs. the paper's binary exact-match) may be why this repro's outcome-only agent
-kept learning instead of collapsing outright — worth testing deliberately in a follow-up.
+The paper's own outcome-only baseline (binary exact-match, no partial credit) collapsed to 0.0 in
+its GRPO case study. That's expected: GRPO has no critic to fall back on, so a group where every
+rollout scores identically — plausible early in training, when nothing's right yet — gives it zero
+gradient to learn from. This repo's outcome-only reward uses F1 partial credit instead, precisely
+to avoid that: even when nobody in a group is exactly right, F1 still gives the group non-identical
+scores to differentiate by. This repro's outcome-only agent did keep learning rather than
+collapsing — consistent with the fix working, though we haven't run a binary-EM-only ablation on
+our own setup to confirm F1 is actually why.
 
 ## Roadmap
 
