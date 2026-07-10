@@ -115,13 +115,19 @@ flowchart LR
 
 *(GRPO only — PPO coming soon)*
 
+Both reward approaches above — outcome-only reward (`GRPO-OR`) and merged reward (`GRPO-MR`) —
+were trained on HotpotQA and evaluated on a 7,404-question held-out test set neither one ever
+trained on.
+
 **Key learnings:**
-1. Merged reward wins — confirmed across two independent runs (Result 2).
-2. GRPO is more fragile to careless reward-shaping than it looks going in: with no value function
-   to fall back on, a whole batch of attempts can share one blind spot and collapse together
+1. Merged reward (`GRPO-MR`) beats outcome-only reward (`GRPO-OR`) on our held-out test set
+   (Result 2).
+2. A bare penalty with no matching positive incentive fully and permanently collapsed `GRPO-OR`'s
+   policy. `GRPO-MR` was far more resilient to the same penalties, though not fully immune
    (Result 3).
-3. We spotted a specific collapse mode in the paper's own baseline before ever training, and
-   adapted this repo's reward around it (Result 4).
+3. We identified why the paper's own outcome-only baseline collapsed to 0.0 (GRPO has no critic,
+   so zero-gradient rollout groups give it nothing to learn from) and designed this repo's reward
+   to avoid that failure mode — our outcome-only condition never collapsed (Result 4).
 
 ### 1. What's actually being measured
 
@@ -165,18 +171,34 @@ rewards extra searching.
 ![Search calls per completion over training, both conditions](results/tool_call_frequency.png)
 
 <details>
-<summary>Is the EM/F1 win just favorable timing, or does it hold up throughout training?</summary>
+<summary>Why did this need a second run — and why is that not just seed-shopping?</summary>
+
+Before ever launching a training run, four objective checks were written down for deciding
+whether a result could just be noise: is the gap between conditions smaller than the run's own
+step-to-step swings; does the held-out result contradict the training-time trend; does the
+paper's claimed search-frequency mechanism actually show up; does retrieval_fraction keep
+declining instead of stabilizing. These were fixed in advance, not chosen after seeing a result
+that didn't look right.
+
+The first run (300 steps, 150 distinct training prompts) tripped 3 of the 4. The most damning:
+merged reward led throughout training, but held-out data flipped it entirely — `GRPO-OR` ahead,
+0.2355 vs. 0.2068 EM. That's a real, quantified reliability failure, not a hunch.
+
+The fix was **one** pre-planned replication at double the training data (300 distinct prompts
+instead of 150), run identically for both conditions — not several seeds tried until one gave
+the preferred answer. A new seed was necessary only because re-running the same seed on this
+deterministic pipeline reproduces the same run, not an independent data point; the actual fix is
+the added training data, not the seed itself.
 
 ![Smoothed training curves: exact match and F1 over training steps](results/training_curves_smoothed.png)
 
-Merged reward (orange) leads for most of training, not just at the final checkpoint — this
-rules out "got lucky at the end" as the explanation. (Curves are a 15-point rolling average of
-per-step training metrics; the raw values are noisy step-to-step, as GRPO reward inherently is —
-smoothing is only for readability, not a different underlying result.)
-
-This needed two attempts: a first, smaller run (300 steps) was too noisy — merged reward led
-in training but reversed on held-out data. Doubling the budget and using a new seed resolved it,
-with merged reward leading on both.
+The replication resolved cleanly: merged reward now leads on both training and held-out data
+(the curves above), and re-checking all four criteria against the new numbers, only one still
+triggers — the search-call-frequency anomaly already shown above (`GRPO-OR` searching more, not
+less, over training).
+(Curves are a 15-point rolling average of per-step training metrics; the raw values are noisy
+step-to-step, as GRPO reward inherently is — smoothing is only for readability, not a different
+underlying result.)
 </details>
 
 ### 3. Three quick reward-shaping patches, tested against the working baseline above — all backfired
