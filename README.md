@@ -4,8 +4,8 @@
 answer — produces a measurably better multi-turn search agent.
 
 Inspired by ["Reinforcing Multi-Turn Reasoning in LLM Agents via Turn-Level Reward
-Design"](https://arxiv.org/abs/2505.11821) (arXiv:2505.11821), specifically its GRPO case study
-(`GRPO-OR` vs. `GRPO-MR`) — not a strict reproduction. Biggest differences: a much smaller model
+Design"](https://arxiv.org/abs/2505.11821) (arXiv:2505.11821), specifically its GRPO and PPO case study
+ — not a strict reproduction. Biggest differences: a much smaller model
 (`Qwen3.5-0.8B` vs. the paper's `Qwen2.5-7B`), a different dataset (HotpotQA vs. TriviaQA), and a
 softer search-turn cap (2 vs. their hard 1). Smaller deviations are noted inline below.
 
@@ -14,17 +14,15 @@ softer search-turn cap (2 vs. their hard 1). Smaller deviations are noted inline
 Same agent, same decision loop — at each turn it decides for itself whether to search again or
 answer.
 
-- **`GRPO-OR` — outcome only.** One score, from the final answer alone. **Implemented** (this
-  repo's `outcome_only`).
+- **`GRPO-OR` — outcome only.** One score, from the final answer alone. **Implemented**
 - **`GRPO-MR` — merged reward.** The same final-answer score, *plus* a bonus for good search
   behavior — but both are summed into one combined number per attempt, still one score in, one
-  score out (the paper calls this general approach "naive"). **Implemented** (this repo's
-  `turn_level`).
+  score out (the paper calls this general approach "naive"). **Implemented**
 - **`MT-PPO` — turn-level credit assignment for PPO.** Each turn gets its *own* credit via PPO's
   critic, instead of folding everything into one number — the paper's best-performing method.
-  **Planned, not yet built** (see Roadmap).
+  **Coming soon**
 
-### Outcome Reward (GRPO-OR)
+### Outcome Only Reward (GRPO-OR)
 
 ```mermaid
 flowchart LR
@@ -59,18 +57,10 @@ flowchart LR
     A3 -.-> R3b{{"This turn's own credit"}}
 ```
 
-This repo implements the first two under GRPO (`GRPO-OR`/`GRPO-MR`) — both complete, see Results
-below. The same two reward methodologies under PPO (`PPO-OR`/`PPO-MR`) are designed but not yet
-run — see Roadmap.
-
 ## Results
 
-**Status: the GRPO comparison below (outcome reward vs. turn-level reward, Results 1–4) is
-complete.** The PPO comparison described above has a finished design but hasn't been run yet —
-see Roadmap. Everything below is GRPO-only.
-
-**Key learnings, before the detail:**
-1. Turn-level reward genuinely wins — confirmed across two independent runs (Result 2).
+**Key learnings:**
+1. Merged reward wins — confirmed across two independent runs (Result 2).
 2. GRPO is more fragile to careless reward-shaping than it looks going in: with no value function
    to fall back on, a whole batch of attempts can share one blind spot and collapse together
    (Result 3).
@@ -86,14 +76,14 @@ producing a final answer. Three metrics track different things:
 - **F1** — word-overlap partial credit (the standard SQuAD-style scoring paper QA benchmarks use)
   for answers that are close but not verbatim.
 - **Retrieval fraction** — of the real supporting-fact passages actually needed to answer the
-  question, what fraction did the agent's searches surface? Only meaningful for turn-level reward,
+  question, what fraction did the agent's searches surface? Only meaningful for merged reward,
   since that's the only condition whose reward depends on it.
 
-### 2. Turn-level reward (`GRPO-MR`) wins
+### 2. Merged reward (`GRPO-MR`) wins
 
 ![GRPO-OR and GRPO-MR, this repro's held-out results](results/held_out_em_f1_comparison.png)
 
-| Metric (held-out) | `GRPO-OR` / outcome reward | `GRPO-MR` / turn-level reward (naive*) |
+| Metric (held-out) | `GRPO-OR` / outcome reward | `GRPO-MR` / merged reward (naive*) |
 |---|---|---|
 | Exact match | 0.242 | **0.307** |
 | F1 | 0.343 | **0.399** |
@@ -110,14 +100,14 @@ surprising, since nothing in the reward rewards extra searching. Unexplained so 
 
 ![Smoothed training curves: exact match and F1 over training steps](results/training_curves_smoothed.png)
 
-Turn-level reward (orange) leads for most of training, not just at the final checkpoint — this
+Merged reward (orange) leads for most of training, not just at the final checkpoint — this
 rules out "got lucky at the end" as the explanation. (Curves are a 15-point rolling average of
 per-step training metrics; the raw values are noisy step-to-step, as GRPO reward inherently is —
 smoothing is only for readability, not a different underlying result.)
 
-This needed two attempts: a first, smaller run (300 steps) was too noisy — turn-level reward led
+This needed two attempts: a first, smaller run (300 steps) was too noisy — merged reward led
 in training but reversed on held-out data. Doubling the budget and using a new seed resolved it,
-with turn-level reward leading on both.
+with merged reward leading on both.
 </details>
 
 ### 3. Three quick reward-shaping patches, tested against the working baseline above — all backfired
@@ -128,18 +118,18 @@ tried in one session. **None worked** — but *how* they failed is the lesson:
 ![Held-out exact match across all four reward configurations](results/followup_experiments_comparison.png)
 
 - **Length penalty** (not from the paper — completions had grown 4x with no accuracy gain).
-  Outcome reward **collapsed to 0.090 EM**, garbled text. Turn-level reward dropped to 0.254 EM,
+  Outcome reward **collapsed to 0.090 EM**, garbled text. Merged reward dropped to 0.254 EM,
   stayed coherent.
 - **The paper's own PPO search-count penalty** (`R_search = -λ_s·n_search`, borrowed into GRPO —
   the GRPO ablation has no such term). Outcome reward **collapsed to 0.024 EM**, nonsense answers.
-  Turn-level reward dropped to 0.221 EM — collapsed too, then *recovered* late in training.
+  Merged reward dropped to 0.221 EM — collapsed too, then *recovered* late in training.
 - **Isolating control**: same prompt-guidance removal, *no* penalty. Outcome reward only dropped
-  to 0.201 EM (searched *more*, not less). Turn-level reward rose to 0.320 EM — no cost. This
+  to 0.201 EM (searched *more*, not less). Merged reward rose to 0.320 EM — no cost. This
   pins the two collapses above on the penalty term itself, not the missing guidance.
 
 **Why**: GRPO scores a group of attempts purely relative to each other, with no value function to
 fall back on. If every attempt in a group finds the same cheap trick (stop searching, just guess),
-GRPO can't see past it — the whole group looks equally bad. Turn-level reward's extra signal gave
+GRPO can't see past it — the whole group looks equally bad. Merged reward's extra signal gave
 the model something to hold onto instead; outcome reward's plainer signal didn't.
 
 **Takeaway**: a bare penalty with no matching positive incentive is genuinely risky under GRPO —
@@ -154,7 +144,7 @@ kept learning instead of collapsing outright — worth testing deliberately in a
 
 - **GRPO: outcome-only vs. merged-reward** — training and held-out evaluation complete for both
   conditions across two runs; the symmetric re-run shows a real, held-out-confirmed advantage for
-  turn-level reward (see Results above). Three follow-up reward-design experiments are complete
+  merged reward (see Results above). Three follow-up reward-design experiments are complete
   (see Results above); Phase 6 is fully done.
 - **PPO: outcome-only vs. merged-reward** — design complete; not yet started.
 - **LLM-as-judge reward** (an alternative to exact-match/F1 scoring, explored on top of the PPO
