@@ -3,10 +3,11 @@
 **Goal**: determine whether rewarding an AI agent's intermediate actions — not just its final
 answer — produces a measurably better multi-turn search agent.
 
-A simplified reproduction of ["Reinforcing Multi-Turn Reasoning in LLM Agents via Turn-Level
-Reward Design"](https://arxiv.org/abs/2505.11821) (arXiv:2505.11821) — its GRPO case study
-(`GRPO-OR`/`GRPO-MR`). The paper's main-results PPO comparison (`PPO-OR`/`PPO-MR`) is designed
-as a follow-on (see Roadmap) but hasn't been run yet — nothing PPO-related is done here yet.
+Inspired by ["Reinforcing Multi-Turn Reasoning in LLM Agents via Turn-Level Reward
+Design"](https://arxiv.org/abs/2505.11821) (arXiv:2505.11821), specifically its GRPO case study
+(`GRPO-OR` vs. `GRPO-MR`) — not a strict reproduction. Biggest differences: a much smaller model
+(`Qwen3.5-0.8B` vs. the paper's `Qwen2.5-7B`), a different dataset (HotpotQA vs. TriviaQA), and a
+softer search-turn cap (2 vs. their hard 1). Smaller deviations are noted inline below.
 
 ## What this compares
 
@@ -22,12 +23,9 @@ repo implements the first two:
   `turn_level`).
 - **`MT-GRPO` — turn-level credit assignment for GRPO.** Each turn gets its *own*, separately
   estimated credit instead of folding into one number, via extra rollouts per turn. **Out of
-  scope** — the paper itself flags this as needing exponentially many rollouts, "computationally
-  prohibitive" at scale, and only tests it in a small case study; the training library this repo
-  uses also has no supported hook for it.
-- **`MT-PPO` — turn-level credit assignment for PPO.** Same idea, but via PPO's critic instead of
-  extra rollouts — the paper's actual main, best-benchmarked method. **Planned, not yet built**
-  (see Roadmap) — unlike `MT-GRPO`, this one's on the real roadmap, just not done.
+  scope** — exponentially expensive, and the training library this repo uses has no hook for it.
+- **`MT-PPO` — turn-level credit assignment for PPO.** Same idea, via PPO's critic instead of
+  extra rollouts — the paper's best-performing method. **Planned, not yet built** (see Roadmap).
 
 **`GRPO-OR`:**
 
@@ -75,14 +73,10 @@ complete.** The PPO comparison described above has a finished design but hasn't 
 see Roadmap. Everything below is GRPO-only.
 
 **Key learnings, before the detail:**
-1. Turn-level reward genuinely wins — and only *after* it survived a second independent run was
-   that trustworthy enough to report (Result 2).
+1. Turn-level reward genuinely wins — confirmed across two independent runs (Result 2).
 2. GRPO is more fragile to careless reward-shaping than it looks going in: with no value function
    to fall back on, a whole batch of attempts can share one blind spot and collapse together
    (Result 3).
-3. A reward-design choice made for an unrelated reason (avoiding zero-gradient groups) plausibly
-   explains why this repro's simplest agent learned anything at all, where the paper's own
-   version of it didn't (Result 4).
 
 ### 1. What's actually being measured
 
@@ -154,14 +148,10 @@ the model something to hold onto instead; outcome reward's plainer signal didn't
 **Takeaway**: a bare penalty with no matching positive incentive is genuinely risky under GRPO —
 more so than under an algorithm with a value function to catch a group sharing one mistake.
 
-### 4. What this adds beyond reproducing the paper
+### 4. One more hypothesis, not yet confirmed
 
-- **A mechanism, not just a result.** *Why* GRPO is more fragile to bare penalties than PPO — no
-  value function, so a whole group can share one blind spot — came from reading the model's actual
-  collapsed completions, not from theory. The paper reports failures; it doesn't explain this one.
-- **The F1-bonus reward choice, reframed.** Plausibly not just "what we used instead" but *why*
-  this repro's outcome-only agent learned anything at all, where the paper's binary-reward version
-  scored 0.0 — a transferable point for GRPO at small scale.
+F1 partial credit (vs. the paper's binary exact-match) may be why this repro's outcome-only agent
+kept learning instead of collapsing outright — worth testing deliberately in a follow-up.
 
 ## Roadmap
 
