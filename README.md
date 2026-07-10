@@ -9,18 +9,21 @@ very end of a long trajectory. That gives the agent no signal about which of its
 actions (like a good search) actually helped. The paper this repo is inspired by found that adding
 a dense, turn-level reward signal on top of the same algorithms fixes that: more stable training,
 faster convergence, and higher accuracy than sparse-reward baselines. This repo tests whether that
-holds up in a much smaller, single-GPU reproduction.
+holds up at a much smaller scale.
 
 Inspired by ["Reinforcing Multi-Turn Reasoning in LLM Agents via Turn-Level Reward
 Design"](https://arxiv.org/abs/2505.11821) (arXiv:2505.11821), specifically its GRPO and PPO case study
- — not a strict reproduction. Biggest differences: a much smaller model
-(`Qwen3.5-0.8B` vs. the paper's `Qwen2.5-7B`), a different dataset (HotpotQA vs. TriviaQA), and a
-softer search-turn cap (2 vs. their hard 1). Smaller deviations are noted inline below.
+ — not a strict reproduction. Biggest differences: a much smaller model on a single consumer GPU
+(`Qwen3.5-0.8B` on an RTX 4090, vs. the paper's `Qwen2.5-7B`) and a different dataset (HotpotQA
+vs. TriviaQA). Smaller deviations are noted inline below.
 
 ## What this compares
 
-Same agent, same decision loop — at each turn it decides for itself whether to search again or
-answer, so different rollouts of the same question can search a different number of times.
+This repo's agent answers a question by deciding, at each turn, whether to search Wikipedia for
+more information or give a final answer — so different rollouts of the same question can end up
+searching a different number of times. Every condition below trains that identical agent and
+decision loop; only the reward function changes, so any difference in results comes from the
+reward design, not the architecture.
 
 GRPO's baseline design can't use an intermediate signal even if you hand it one: it computes one
 advantage per trajectory (Eq. 4 in the paper) and applies that identical value to every token in
