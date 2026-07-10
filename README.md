@@ -17,7 +17,7 @@ Design"](https://arxiv.org/abs/2505.11821) (arXiv:2505.11821), specifically its 
 (`Qwen3.5-0.8B` on an RTX 4090, vs. the paper's `Qwen2.5-7B`) and a different dataset (HotpotQA
 vs. TriviaQA). Smaller deviations are noted inline below.
 
-## What this compares
+## The agent
 
 This repo's agent answers a question by deciding, at each turn, whether to search Wikipedia for
 more information or give a final answer — so different rollouts of the same question can end up
@@ -32,6 +32,8 @@ flowchart LR
     S --> D
     D -- answer --> A(["Final answer"])
 ```
+
+## What this compares
 
 GRPO's baseline design can't use an intermediate signal even if you hand it one: it computes one
 advantage per trajectory (Eq. 4 in the paper) and applies that identical value to every token in
