@@ -134,13 +134,11 @@ trained on, using three metrics that track different things:
 
 ![GRPO-OR and GRPO-MR, this repro's held-out results](results/held_out_em_f1_comparison.png)
 
-| Metric (held-out) | `GRPO-OR` / outcome reward | `GRPO-MR` / merged reward (naive*) |
+| Metric (held-out) | `GRPO-OR` / outcome reward | `GRPO-MR` / merged reward |
 |---|---|---|
 | Exact match | 0.242 | **0.307** |
 | F1 | 0.343 | **0.399** |
-
-*\*"naive" is the paper's own term for this mechanism: a reward bonus summed into one
-trajectory-level scalar, scored by GRPO's standard advantage.*
+| Retrieval fraction | n/a | 0.528 |
 
 `GRPO-OR` has no retrieval_fraction to compare against — its reward never looks at search
 quality — so the only meaningful comparison for `GRPO-MR`'s retrieval_fraction is against itself
