@@ -150,9 +150,11 @@ questions genuinely require two hops of evidence, not one.
 >
 > **Search 1:** `Red's Eats` → surfaces the restaurant's own Wikipedia article: it's located in
 > Wiscasset, Maine.
+>
 > **Search 2:** `Wiscasset, Maine, county` → nothing told the agent to search this. It had to
 > notice "Wiscasset" in the first search's results and decide, on its own, to look that up next.
 > Surfaces the article naming the county.
+>
 > **Answer:** Lincoln County (correct).
 
 Two searches, the second one chosen because of what the first one returned, landing on the right
