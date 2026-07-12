@@ -1,10 +1,10 @@
 # Outcome vs. Turn-Level Reward for Multi-Turn Search Agents
 
-**Goal**: determine whether rewarding an AI agent's intermediate actions — not just its final
-answer — produces a measurably better multi-turn search agent.
+**Goal**: determine whether rewarding an AI agent's intermediate actions, not just its final
+answer, produces a measurably better multi-turn search agent.
 
 **Why this matters.** RL algorithms like GRPO and PPO are the standard way to train multi-turn LLM
-agents, but they're usually trained on sparse outcome rewards — one number, right or wrong, at the
+agents, but they're usually trained on sparse outcome rewards: one number, right or wrong, at the
 very end of a long trajectory. That gives the agent no signal about which of its intermediate
 actions (like a good search) actually helped. The paper this repo is inspired by found that adding
 a dense, turn-level reward signal on top of the same algorithms fixes that: more stable training,
@@ -12,16 +12,16 @@ faster convergence, and higher accuracy than sparse-reward baselines. This repo 
 holds up at a much smaller scale.
 
 Inspired by ["Reinforcing Multi-Turn Reasoning in LLM Agents via Turn-Level Reward
-Design"](https://arxiv.org/abs/2505.11821) (arXiv:2505.11821), specifically its GRPO and PPO case study
- — not a strict reproduction. Biggest differences: a much smaller model on a single consumer GPU
+Design"](https://arxiv.org/abs/2505.11821) (arXiv:2505.11821), specifically its GRPO and PPO case
+study, though not a strict reproduction. Biggest differences: a much smaller model on a single consumer GPU
 (`Qwen3.5-0.8B` on an RTX 4090, vs. the paper's `Qwen2.5-7B`) and a different dataset (HotpotQA
 vs. TriviaQA, picked for genuinely multi-hop questions). Smaller deviations are noted inline below.
 
 ## The agent
 
 This repo's agent answers a question by deciding, at each turn, whether to search a Wikipedia
-snapshot (a fixed, offline copy, not the live site) for more information or give a final answer —
-so different rollouts of the same question can end up searching a different number of times.
+snapshot (a fixed, offline copy, not the live site) for more information or give a final answer.
+Different rollouts of the same question can end up searching a different number of times.
 Every condition below trains that identical agent and decision loop; only the reward function
 changes, so any difference in results comes from the reward design, not the architecture.
 
@@ -39,31 +39,32 @@ flowchart LR
 
 ## Reward approaches explored
 
-GRPO's baseline design can't use an intermediate signal even if you hand it one: it computes one
+GRPO's baseline design can't use an intermediate signal even if you hand it one. It computes one
 advantage per trajectory (Eq. 4 in the paper) and applies that identical value to every token in
 every turn. A sharp search followed by a garbled answer, and a lazy search followed by a lucky
-guess get scored no differently turn-by-turn — GRPO can't isolate which turn actually earned the
-credit. That's true no matter *where* in the trajectory you attach a bonus reward — GRPO only
-ever sees one number per trajectory, so a bonus placed mid-episode still just gets folded into
-that same number by the time training sees it. Actually using *where* a reward happened requires
-a critic that can evaluate any point in a trajectory on its own — which is what PPO has and GRPO
-doesn't, and why the last two approaches below switch algorithms instead of just rearranging the
-reward within GRPO.
+guess, get scored no differently turn-by-turn. GRPO simply can't isolate which turn actually
+earned the credit.
+
+That holds no matter where in the trajectory you attach a bonus reward. GRPO only ever sees one
+number per trajectory, so a bonus placed mid-episode still gets folded into that same number by
+the time training sees it. Actually using where a reward happened requires a critic that can
+evaluate any point in a trajectory on its own. PPO has one; GRPO doesn't. That's why the last two
+approaches below switch algorithms instead of just rearranging the reward within GRPO.
 
 This repo compares four ways to address it, in increasing order of how directly they solve it:
 
-- `GRPO-OR` **— outcome only.** Reward = final-answer correctness, nothing else. Simplest
+- **`GRPO-OR`: outcome only.** Reward = final-answer correctness, nothing else. Simplest
 baseline; search behavior gets no direct training signal at all. **Implemented**
-- `GRPO-MR` **— merged reward** (the paper's own term for this approach is "naive"). Adds a bonus
-for good search behavior — but folds it into the *same* one trajectory-level number GRPO already
+- **`GRPO-MR`: merged reward** (the paper's own term for this approach is "naive"). Adds a bonus
+for good search behavior, but folds it into the *same* one trajectory-level number GRPO already
 scores. Denser reward, but the advantage is still spread uniformly across every token; GRPO still
 can't tell which turn helped. **Implemented**
-- `PPO-OR` **— the same outcome-only reward as** `GRPO-OR`**, scored by a critic instead.** Same
+- **`PPO-OR`: the same outcome-only reward as `GRPO-OR`, scored by a critic instead.** Same
 reward, different algorithm: no group comparison, just a learned value function estimating
 expected return. This repo's baseline for the comparison below. **Coming soon**
-- `MT-PPO` **— turn-level reward with a critic, not extra rollouts.** Same setup as `PPO-OR`, but
+- **`MT-PPO`: turn-level reward with a critic, not extra rollouts.** Same setup as `PPO-OR`, but
 adds a bonus for good search behavior and places it at the turn it was earned instead of dumping
-it at the end — PPO's critic already estimates value token-by-token (GAE), so credit flows
+it at the end. PPO's critic already estimates value token-by-token (GAE), so credit flows
 backward through the trajectory automatically. No exponential rollout cost, no fixed-turn
 requirement. The paper's best-performing method. **Coming soon**
 
@@ -97,7 +98,7 @@ flowchart LR
 ```
 
 The search bonus checks whether the search turned up one of the specific Wikipedia articles a
-person identified as necessary to answer the question — separate from whether the final answer
+person identified as necessary to answer the question, separate from whether the final answer
 turns out right or wrong, which is still scored the normal way (exact-match + F1).
 
 
@@ -141,7 +142,7 @@ flowchart LR
 
 ### What's being measured
 
-Both reward approaches above — outcome-only reward (`GRPO-OR`) and merged reward (`GRPO-MR`) —
+Both reward approaches above (outcome-only reward `GRPO-OR` and merged reward `GRPO-MR`)
 were trained on HotpotQA, a Wikipedia-based question-answering dataset built so that most
 questions genuinely require two hops of evidence, not one.
 
@@ -152,19 +153,19 @@ questions genuinely require two hops of evidence, not one.
 > **Search 2:** `Wiscasset, Maine, county` → nothing told the agent to search this. It had to
 > notice "Wiscasset" in the first search's results and decide, on its own, to look that up next.
 > Surfaces the article naming the county.
-> **Answer:** Lincoln County — correct.
+> **Answer:** Lincoln County (correct).
 
 Two searches, the second one chosen because of what the first one returned, landing on the right
-answer — a genuine, observed instance of the two-hop behavior `retrieval_fraction` (below) is
+answer. That's a genuine, observed instance of the two-hop behavior `retrieval_fraction` (below) is
 designed to measure, not a hypothetical. Both conditions were evaluated on a 7,404-question
 held-out test set neither one ever trained on, using three metrics that track different things:
 
-- **Exact match (EM)** — did the agent's final answer literally match an accepted answer string?
+- **Exact match (EM)**: did the agent's final answer literally match an accepted answer string?
 Strict: "Barack Obama" ≠ "Obama."
-- **F1** — the standard SQuAD-style score QA benchmarks use: the harmonic mean of word-level
+- **F1**: the standard SQuAD-style score QA benchmarks use, the harmonic mean of word-level
 precision and recall between the predicted and gold answer, giving partial credit for answers
 that are close but not verbatim.
-- **Retrieval fraction** — of the real supporting-fact passages actually needed to answer the
+- **Retrieval fraction**: of the real supporting-fact passages actually needed to answer the
 question, what fraction did the agent's searches surface? Only tracked for merged reward, since
 that's the only condition whose reward depends on it.
 
@@ -172,20 +173,20 @@ that's the only condition whose reward depends on it.
 
 ### Why sparse reward is risky for multi-turn agents
 
-As explained above, GRPO can't isolate which turn earned the credit — it only ever sees one
+As explained above, GRPO can't isolate which turn earned the credit. It only ever sees one
 number per trajectory. The practical consequence: if nothing in that number looks at *how* the
 agent searched, the agent has no reason to keep searching well once training pressure pushes it
-toward "just answer" — the intermediate behavior has nothing propping it up.
+toward "just answer." The intermediate behavior has nothing propping it up.
 
-This isn't hypothetical. The paper's own outcome-only baseline — pure binary exact-match reward,
-no partial credit — collapsed to 0.0 exact match in its case study: the model stopped calling the
+This isn't hypothetical. The paper's own outcome-only baseline (pure binary exact-match reward,
+no partial credit) collapsed to 0.0 exact match in its case study: the model stopped calling the
 search tool at all. The mechanism is a specific one: early in training, when nothing is exactly
-right yet, a whole group of rollouts scores identically 0 under binary EM — GRPO's group-relative
+right yet, a whole group of rollouts scores identically 0 under binary EM, so GRPO's group-relative
 advantage sees zero variance across the group and has nothing to push on. That's exactly why this
 repo's outcome-only reward uses F1 partial credit instead of pure binary EM: even when nobody in
 a group is exactly right, F1 still tells them apart, giving GRPO something to learn from. (We
 haven't run a binary-EM-only ablation on our own setup to directly confirm F1 is the reason our
-outcome-only condition never collapsed the way the paper's did — but it's the mechanism this
+outcome-only condition never collapsed the way the paper's did, but it's the mechanism this
 choice was designed around, and the results below are consistent with it working.)
 
 ### 1. Merged reward (`GRPO-MR`) outperforms outcome-only reward (`GRPO-OR`)
@@ -202,15 +203,15 @@ GRPO-OR and GRPO-MR, this repro's held-out results
 
 That 0.065 exact-match gap is real, not run-to-run noise: a two-proportion significance test on
 the ~7,400 held-out questions puts it at p < 1e-18 (z ≈ 8.8), with a 95% confidence interval of
-roughly [0.050, 0.079] — comfortably clear of zero. (This treats the two conditions as
-independent samples, since per-question correctness isn't stored separately for each condition —
-the true paired test, scoring both models on the exact same questions, would likely show even
+roughly [0.050, 0.079], comfortably clear of zero. (This treats the two conditions as
+independent samples, since per-question correctness isn't stored separately for each condition.
+The true paired test, scoring both models on the exact same questions, would likely show even
 tighter significance.)
 
 `retrieval_fraction` is the clearest direct evidence that the mechanism above is actually
 working: it's merged reward visibly keeping "search well" alive as a trained behavior, instead of
 letting it atrophy the way outcome-only reward has no reason not to. `GRPO-OR` has no
-retrieval_fraction to compare against — its reward never looks at search quality — so the only
+retrieval_fraction to compare against, since its reward never looks at search quality, so the only
 meaningful comparison for `GRPO-MR`'s retrieval_fraction is against itself over time. It climbed
 steadily over training, closing in on the corpus's own ~80% ceiling (about 20% of HotpotQA's gold
 passage titles simply aren't in this repo's Wikipedia snapshot, so even perfect retrieval can't
@@ -221,16 +222,16 @@ GRPO-MR's retrieval_fraction rising over training, against the corpus ceiling
 Aside (open question): outcome-only reward's agent searches more over training, not less
 
 Under outcome-only reward, this agent's search-call frequency actually rose over training rather
-than falling — surprising, since nothing in that reward rewards extra searching. We don't have a
-confirmed explanation for this. It doesn't change the headline comparison above (`GRPO-MR` still
-wins on both EM and F1) — it's a real, unexplained pattern worth flagging honestly rather than
-smoothing over.
+than falling, which is surprising, since nothing in that reward rewards extra searching. We don't
+have a confirmed explanation for this. It doesn't change the headline comparison above (`GRPO-MR`
+still wins on both EM and F1). It's a real, unexplained pattern worth flagging honestly rather
+than smoothing over.
 
 Search calls per completion over training, both conditions
 
 
 
-Why did this need a second run — and why is that not just seed-shopping?
+Why did this need a second run, and why is that not just seed-shopping?
 
 Before ever launching a training run, four objective checks were written down for deciding
 whether a result could just be noise: is the gap between conditions smaller than the run's own
@@ -240,11 +241,11 @@ declining instead of stabilizing. These were fixed in advance, not chosen after 
 that didn't look right.
 
 The first run (300 steps, 150 distinct training prompts) tripped 3 of the 4. The most damning:
-merged reward led throughout training, but held-out data flipped it entirely — `GRPO-OR` ahead,
+merged reward led throughout training, but held-out data flipped it entirely: `GRPO-OR` ahead,
 0.2355 vs. 0.2068 EM. That's a real, quantified reliability failure, not a hunch.
 
 The fix was **one** pre-planned replication at double the training data (300 distinct prompts
-instead of 150), run identically for both conditions — not several seeds tried until one gave
+instead of 150), run identically for both conditions, not several seeds tried until one gave
 the preferred answer. A new seed was necessary only because re-running the same seed on this
 deterministic pipeline reproduces the same run, not an independent data point; the actual fix is
 the added training data, not the seed itself.
@@ -253,10 +254,10 @@ Smoothed training curves: exact match and F1 over training steps
 
 The replication resolved cleanly: merged reward now leads on both training and held-out data
 (the curves above), and re-checking all four criteria against the new numbers, only one still
-triggers — the search-call-frequency anomaly already shown above (`GRPO-OR` searching more, not
+triggers: the search-call-frequency anomaly already shown above (`GRPO-OR` searching more, not
 less, over training).
 (Curves are a 15-point rolling average of per-step training metrics; the raw values are noisy
-step-to-step, as GRPO reward inherently is — smoothing is only for readability, not a different
+step-to-step, as GRPO reward inherently is. Smoothing is only for readability, not a different
 underlying result.)
 
 
@@ -266,36 +267,35 @@ underlying result.)
 Section 1 showed sparse reward is fragile because nothing keeps "search well" alive under
 pressure. That raised a follow-up question: how far does merged reward's protection actually
 extend? So we manufactured three more kinds of pressure and stress-tested both conditions
-against them — three ad-hoc, uncalibrated attempts to improve on the baseline above
+against them: three ad-hoc, uncalibrated attempts to improve on the baseline above
 (0.242 / 0.307 EM), each tried in one session. (These are single runs with no significance test,
-unlike Finding 1's — but a formal test would be theater here: the effect sizes below are 3-10x
+unlike Finding 1's, but a formal test would be theater here: the effect sizes below are 3-10x
 collapses, not the kind of gap that a plausible amount of run-to-run noise could produce.)
 
-**None worked** — but *how* they failed is the same lesson as Section 1, playing out a second
+**None worked.** But *how* they failed is the same lesson as Section 1, playing out a second
 way: this is **reward hacking** (also called specification gaming, or Goodhart's law in its
-classic form — "when a measure becomes a target, it ceases to be a good measure"), this time
+classic form: "when a measure becomes a target, it ceases to be a good measure"), this time
 triggered by an added penalty instead of a missing bonus.
 
 Held-out exact match across all four reward configurations
 
-- **Length penalty** (not from the paper — completions had grown 4x with no accuracy gain).
+- **Length penalty** (not from the paper; completions had grown 4x with no accuracy gain).
 Outcome reward **collapsed to 0.090 EM**, garbled text. Merged reward dropped to 0.254 EM,
 stayed coherent.
-- **The paper's own PPO search-count penalty** (`R_search = -λ_s·n_search`, borrowed into GRPO —
-the GRPO ablation has no such term). Outcome reward **collapsed to 0.024 EM**, nonsense answers.
-Merged reward dropped to 0.221 EM — collapsed too, then *recovered* late in training.
+- **The paper's own PPO search-count penalty** (`R_search = -λ_s·n_search`, borrowed into GRPO,
+though the GRPO ablation has no such term). Outcome reward **collapsed to 0.024 EM**, nonsense
+answers. Merged reward dropped to 0.221 EM: it collapsed too, then *recovered* late in training.
 - **Isolating control**: same prompt-guidance removal, *no* penalty. Outcome reward only dropped
-to 0.201 EM (searched *more*, not less). Merged reward rose to 0.320 EM — no cost. This
+to 0.201 EM (searched *more*, not less). Merged reward rose to 0.320 EM. No cost. This
 pins the two collapses above on the penalty term itself, not the missing guidance.
 
 **Why**: GRPO scores a group of attempts purely relative to each other, with no value function to
-fall back on. If every attempt in a group finds the same cheap trick (stop searching, just
-guess) — optimizing the letter of the reward instead of the intended behavior — GRPO can't see
-past it: the whole group looks equally bad, so there's no gradient telling it that's wrong.
-Merged reward's extra signal gave the model something to hold onto instead; outcome reward's
-plainer signal didn't.
+fall back on. If every attempt in a group finds the same cheap trick (stop searching, just guess)
+instead of doing what the reward actually intended, GRPO can't see past it: the whole group looks
+equally bad, so there's no gradient telling it that's wrong. Merged reward's extra signal gave the
+model something to hold onto instead; outcome reward's plainer signal didn't.
 
-**Takeaway**: a bare penalty with no matching positive incentive is genuinely risky under GRPO —
+**Takeaway**: a bare penalty with no matching positive incentive is genuinely risky under GRPO,
 more so than under an algorithm with a value function to catch a group sharing one mistake.
 
 ### Key learnings
@@ -304,7 +304,7 @@ more so than under an algorithm with a value function to catch a group sharing o
   set, by a gap too large to be run-to-run noise (Result 1).
 2. Both results trace back to one mechanism: GRPO gives a whole group of attempts a single,
   shared, relative score, so any behavior the reward doesn't track has nothing keeping it in
-   check — outcome-only reward lets good searching atrophy, and an added penalty lets both
+   check. Outcome-only reward lets good searching atrophy, and an added penalty lets both
    conditions collapse toward "just stop searching." Merged reward's extra signal is real, but
    incomplete, protection against that failure mode (Result 2).
 
@@ -312,15 +312,15 @@ more so than under an algorithm with a value function to catch a group sharing o
 
 ## Roadmap
 
-- **GRPO: outcome-only vs. merged-reward** — training and held-out evaluation complete for both
+- **GRPO: outcome-only vs. merged-reward.** Training and held-out evaluation complete for both
 conditions across two runs; the symmetric re-run shows a real, held-out-confirmed advantage for
 merged reward (see Results above). Three follow-up reward-design experiments are complete
 (see Results above); Phase 6 is fully done.
-- **PPO: outcome-only vs. merged-reward** — design complete; not yet started.
-- **LLM-as-judge reward** — the paper studies two kinds of turn-level reward: *verifiable* (this
+- **PPO: outcome-only vs. merged-reward.** Design complete; not yet started.
+- **LLM-as-judge reward.** The paper studies two kinds of turn-level reward: *verifiable* (this
 repo's `turn_reward`, an objective check on whether a real supporting passage got surfaced) and
 *LLM-as-judge* (a model scores the turn instead). The judge variant, explored on top of the PPO
-comparison — not yet started.
+comparison, is not yet started.
 
 
 
@@ -371,7 +371,7 @@ bash scripts/setup_retrieval.sh   # downloads the wiki-18 BM25 index (+corpus if
 ```
 
 The script downloads the index, checks whether it also needs the separate
-corpus file, and prints the exact command to launch the server — something
+corpus file, and prints the exact command to launch the server, something
 like:
 
 ```bash
@@ -381,7 +381,7 @@ uv run python scripts/retrieval_server.py \
     --port 8000
 ```
 
-Run that (in the background or a separate terminal — it needs to stay up for
+Run that (in the background or a separate terminal, since it needs to stay up for
 the rest of setup and for training/evaluation later), then confirm it's
 working:
 
@@ -402,11 +402,11 @@ uv run python -m turn_level_rewards.train --condition outcome_only
 uv run python -m turn_level_rewards.train --condition turn_level
 ```
 
-The bare invocation above (no extra flags) runs at smoke-test scale — 8 rows, 2 steps, a real
+The bare invocation above (no extra flags) runs at smoke-test scale: 8 rows, 2 steps, a real
 `Qwen/Qwen3.5-0.8B` model against the retrieval server started above. Pass `--train-size`,
 `--max-steps`, `--num-generations`, etc. explicitly for a full-scale run. Both conditions
 log to the same [trackio](https://github.com/gradio-app/trackio) project
-(`turn-level-rewards`) — run `trackio show --project turn-level-rewards` to view.
+(`turn-level-rewards`). Run `trackio show --project turn-level-rewards` to view.
 
 ## Contributing
 
