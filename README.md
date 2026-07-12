@@ -158,17 +158,20 @@ questions genuinely require two hops of evidence, not one.
 > **Answer:** Lincoln County (correct).
 
 Two searches, the second one chosen because of what the first one returned, landing on the right
-answer. That's a genuine, observed instance of the two-hop behavior `retrieval_fraction` (below) is
-designed to measure, not a hypothetical. Both conditions were evaluated on a 7,404-question
+answer. This is exactly the two-hop behavior `retrieval_fraction` (below) is designed to measure.
+Both conditions were evaluated on a 7,404-question
 held-out test set neither one ever trained on, using three metrics that track different things:
 
 - **Exact match (EM)**: did the agent's final answer literally match an accepted answer string?
-Strict: "Barack Obama" ≠ "Obama."
+Predicting "Lincoln County" matches. Predicting "Lincoln" does not, even though it's basically
+right.
 - **F1**: the standard SQuAD-style score QA benchmarks use, the harmonic mean of word-level
-precision and recall between the predicted and gold answer, giving partial credit for answers
-that are close but not verbatim.
+precision and recall between the predicted and gold answer. That same "Lincoln" prediction gets
+partial credit here, instead of the zero EM gives it, since it's incomplete rather than wrong.
 - **Retrieval fraction**: of the real supporting-fact passages actually needed to answer the
-question, what fraction did the agent's searches surface? Only tracked for merged reward, since
+question, what fraction did the agent's searches surface? In the example above, that's 1.0 (both
+the Red's Eats and Wiscasset articles got found). Finding only one of the two would score 0.5.
+Only tracked for merged reward, since
 that's the only condition whose reward depends on it.
 
 
