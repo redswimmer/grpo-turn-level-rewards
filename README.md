@@ -161,6 +161,8 @@ Two searches, the second one chosen because of what the first one returned, land
 answer. This is exactly the two-hop behavior `retrieval_fraction` (below) is designed to measure.
 Both conditions were evaluated on a 7,404-question
 held-out test set neither one ever trained on, using three metrics that track different things:
+two for whether the answer was right, one for whether the search behavior itself was good, since
+testing whether rewarding search helps means measuring both sides of that claim.
 
 - **Exact match (EM)**: did the agent's final answer literally match an accepted answer string?
 Predicting "Lincoln County" matches. Predicting "Lincoln" does not, even though it's basically
@@ -178,21 +180,17 @@ that's the only condition whose reward depends on it.
 
 ### Why sparse reward is risky for multi-turn agents
 
-As explained above, GRPO can't isolate which turn earned the credit. It only ever sees one
-number per trajectory. The practical consequence: if nothing in that number looks at *how* the
-agent searched, the agent has no reason to keep searching well once training pressure pushes it
-toward "just answer." The intermediate behavior has nothing propping it up.
+GRPO can't isolate which turn earned the credit. It scores a whole trajectory with one number, so
+if that number never reflects how well the agent searched, there's nothing keeping good search
+behavior alive once training pressure pushes the model toward just answering.
 
-This isn't hypothetical. The paper's own outcome-only baseline (pure binary exact-match reward,
-no partial credit) collapsed to 0.0 exact match in its case study: the model stopped calling the
-search tool at all. The mechanism is a specific one: early in training, when nothing is exactly
-right yet, a whole group of rollouts scores identically 0 under binary EM, so GRPO's group-relative
-advantage sees zero variance across the group and has nothing to push on. That's exactly why this
-repo's outcome-only reward uses F1 partial credit instead of pure binary EM: even when nobody in
-a group is exactly right, F1 still tells them apart, giving GRPO something to learn from. (We
-haven't run a binary-EM-only ablation on our own setup to directly confirm F1 is the reason our
-outcome-only condition never collapsed the way the paper's did, but it's the mechanism this
-choice was designed around, and the results below are consistent with it working.)
+For example: one rollout searches well, finds the right supporting article, but still gets the
+final answer wrong (reward: 0). Another skips searching entirely and answers correctly anyway,
+using knowledge already baked in from pretraining rather than anything found this episode
+(reward: 1). Outcome-only reward ranks the second rollout above the first, exactly backwards from
+what should be reinforced. Ideally both would get credit, just for different things: the first
+for its good search, the second for its correct answer, scored independently. That's exactly what
+turn-level reward adds, and what outcome-only reward can't do.
 
 ### 1. Merged reward (`GRPO-MR`) outperforms outcome-only reward (`GRPO-OR`)
 
