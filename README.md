@@ -178,7 +178,7 @@ that's the only condition whose reward depends on it.
 
 
 
-### Why sparse reward is risky for multi-turn agents
+### Sparse reward doesn't reward the process, only the outcome
 
 GRPO can't isolate which turn earned the credit. It scores a whole trajectory with one number, so
 if that number never reflects how well the agent searched, there's nothing keeping good search
@@ -187,14 +187,15 @@ behavior alive once training pressure pushes the model toward just answering.
 For example: one rollout searches well, finds the right supporting article, but still gets the
 final answer wrong (reward: 0). Another skips searching entirely and answers correctly anyway,
 using knowledge already baked in from pretraining rather than anything found this episode
-(reward: 1). Outcome-only reward ranks the second rollout above the first, exactly backwards from
-what should be reinforced. Ideally both would get credit, just for different things: the first
-for its good search, the second for its correct answer, scored independently. That's exactly what
-turn-level reward adds, and what outcome-only reward can't do.
+(reward: 1). Outcome-only reward gives full credit to the guess and zero credit to the good
+search, even though the search is the behavior we actually want to encourage. Ideally both would
+get credit, just for different things: the first for its good search, the second for its correct
+answer, scored independently. That's exactly what turn-level reward adds, and what outcome-only
+reward can't do.
 
 ### 1. Merged reward (`GRPO-MR`) outperforms outcome-only reward (`GRPO-OR`)
 
-GRPO-OR and GRPO-MR, this repro's held-out results
+![GRPO-OR and GRPO-MR, this repro's held-out results](results/held_out_em_f1_comparison.png)
 
 
 | Metric (held-out)  | `GRPO-OR` / outcome reward | `GRPO-MR` / merged reward |
@@ -220,9 +221,10 @@ steadily over training, closing in on the corpus's own ~80% ceiling (about 20% o
 passage titles simply aren't in this repo's Wikipedia snapshot, so even perfect retrieval can't
 reach 1.0):
 
-GRPO-MR's retrieval_fraction rising over training, against the corpus ceiling
+![GRPO-MR's retrieval_fraction rising over training, against the corpus ceiling](results/retrieval_fraction_trend.png)
 
-Aside (open question): outcome-only reward's agent searches more over training, not less
+<details>
+<summary>Aside (open question): outcome-only reward's agent searches more over training, not less</summary>
 
 Under outcome-only reward, this agent's search-call frequency actually rose over training rather
 than falling, which is surprising, since nothing in that reward rewards extra searching. We don't
@@ -230,11 +232,13 @@ have a confirmed explanation for this. It doesn't change the headline comparison
 still wins on both EM and F1). It's a real, unexplained pattern worth flagging honestly rather
 than smoothing over.
 
-Search calls per completion over training, both conditions
+![Search calls per completion over training, both conditions](results/tool_call_frequency.png)
+</details>
 
 
 
-Why did this need a second run, and why is that not just seed-shopping?
+<details>
+<summary>Why did this need a second run, and why is that not just seed-shopping?</summary>
 
 Before ever launching a training run, four objective checks were written down for deciding
 whether a result could just be noise: is the gap between conditions smaller than the run's own
@@ -253,7 +257,7 @@ the preferred answer. A new seed was necessary only because re-running the same 
 deterministic pipeline reproduces the same run, not an independent data point; the actual fix is
 the added training data, not the seed itself.
 
-Smoothed training curves: exact match and F1 over training steps
+![Smoothed training curves: exact match and F1 over training steps](results/training_curves_smoothed.png)
 
 The replication resolved cleanly: merged reward now leads on both training and held-out data
 (the curves above), and re-checking all four criteria against the new numbers, only one still
@@ -262,6 +266,7 @@ less, over training).
 (Curves are a 15-point rolling average of per-step training metrics; the raw values are noisy
 step-to-step, as GRPO reward inherently is. Smoothing is only for readability, not a different
 underlying result.)
+</details>
 
 
 
@@ -280,7 +285,7 @@ way: this is **reward hacking** (also called specification gaming, or Goodhart's
 classic form: "when a measure becomes a target, it ceases to be a good measure"), this time
 triggered by an added penalty instead of a missing bonus.
 
-Held-out exact match across all four reward configurations
+![Held-out exact match across all four reward configurations](results/followup_experiments_comparison.png)
 
 - **Length penalty** (not from the paper; completions had grown 4x with no accuracy gain).
 Outcome reward **collapsed to 0.090 EM**, garbled text. Merged reward dropped to 0.254 EM,
