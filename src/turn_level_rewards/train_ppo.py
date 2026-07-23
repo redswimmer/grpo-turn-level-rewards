@@ -223,11 +223,28 @@ def build_policy_and_critic(model_name: str = MODEL_NAME) -> _PolicyAndCritic:
     """Real policy + real critic, both loaded from the same base checkpoint -- separate models,
     not a shared backbone (the paper's own spec). Not unit-tested: loads real weights: validated
     by the live smoke test (Task 11) instead.
+
+    gradient_checkpointing_enable() is load-bearing, not an optional perf knob: this real bug was
+    caught by Task 13's live smoke test. Qwen3.5 is a hybrid architecture with linear-attention
+    ("gated delta rule") layers; `flash-linear-attention`/`causal-conv1d` aren't installed in this
+    repo's env (see the "fast path is not available" warning printed at model-load time), so those
+    layers fall back to a naive pure-PyTorch path whose intermediate activations are far more
+    memory-hungry than plain full attention at the same sequence length. Confirmed directly: a
+    real forward+backward through both policy and critic without checkpointing hit a masked-OOM
+    (this machine's broken NVML/driver mismatch turns a real `CUDA out of memory` into a confusing
+    `NVML_SUCCESS ... INTERNAL ASSERT FAILED` -- see docs/phase-7-mt-ppo.md's Handoff notes) at
+    just seq_len=2048 -- squarely within this repo's real n_max=4-turn,
+    max_completion_length=2048 rollout range. With gradient_checkpointing_enable() on both models,
+    the same setup peaked at ~10.7GB even at seq_len=8192. Without this, the live smoke test
+    cannot complete a single PPO update on this repo's single RTX 4090 (matches CLAUDE.md Phase
+    4's own precedent of needing gradient_checkpointing=True for GRPO's OOM).
     """
     policy = AutoModelForCausalLM.from_pretrained(model_name, dtype=torch.bfloat16)
     critic = AutoModelForSequenceClassification.from_pretrained(
         model_name, num_labels=1, dtype=torch.bfloat16
     )
+    policy.gradient_checkpointing_enable()
+    critic.gradient_checkpointing_enable()
     return _PolicyAndCritic(policy, critic)
 
 
@@ -336,6 +353,16 @@ class MTPPOTrainer(Trainer):
             # loose Trainer base-class type annotation on self.model -- same root cause as the
             # unresolved-attribute suppressions in create_optimizer above.
             input_ids = torch.tensor([prompt_token_ids], device=policy.device)  # ty: ignore[invalid-argument-type]
+            # policy.generate needs use_cache=True for efficient autoregressive decoding, but
+            # transformers forces use_cache=False whenever gradient_checkpointing is enabled AND
+            # the model is in training mode (see build_policy_and_critic's docstring for why
+            # checkpointing itself is required here) -- so generation must run with the model
+            # temporarily in eval() mode, restored to train() immediately after. Confirmed via the
+            # live smoke test: without this toggle, every generate() call falls back to
+            # use_cache=False and pays a large, avoidable slowdown for no memory benefit (rollout
+            # generation is always under torch.no_grad() below, so checkpointing's memory savings
+            # never applied here in the first place).
+            policy.eval()  # ty: ignore[unresolved-attribute]
             with torch.no_grad():
                 # policy.generate is a real PreTrainedModel method, but ty can't see it through
                 # the loose Trainer base-class type annotation -- policy is provably an
@@ -346,6 +373,7 @@ class MTPPOTrainer(Trainer):
                     do_sample=True,
                     temperature=1.0,
                 )
+            policy.train()  # ty: ignore[unresolved-attribute]
             new_token_ids = generation[0, len(prompt_token_ids) :].tolist()
             parsed = parse_response(self.tokenizer, new_token_ids, prefix=prompt_token_ids)
             messages.append(parsed)
@@ -387,6 +415,23 @@ class MTPPOTrainer(Trainer):
         Called twice per episode per PPO update: once under torch.no_grad() right after rollout
         (the frozen "old" reference for the clip ratio, GAE, and the KL term), and once per PPO
         inner epoch WITH grad (the "new" values that get backpropagated).
+
+        Applies the policy's LM head only at the handful of positions whose log-prob is actually
+        needed (one per action token), instead of over the whole sequence -- a real bug the live
+        smoke test caught (see build_policy_and_critic's docstring for the full story). This
+        model's vocab is 248,320 tokens; a naive `policy(input_ids).logits` call computes and
+        keeps alive a `[seq_len, vocab]` tensor for EVERY position (prompt tokens and
+        environment-injected tool-response tokens included, which this repo's episodes have many
+        more of than actual action tokens) -- gradient checkpointing (see
+        build_policy_and_critic) only checkpoints the backbone's transformer layers, not this
+        vocab-sized lm_head/log_softmax step sitting outside it, so that tensor's memory was still
+        the dominant, unbounded-by-checkpointing cost. Confirmed directly: even after adding
+        checkpointing alone, a real run OOM'd (masked as the NVML error described in
+        docs/phase-7-mt-ppo.md's Handoff notes) on episodes with full_token_ids as short as 1560
+        tokens. Computing the backbone's hidden states once (cheap: `[seq_len, hidden_size=1024]`,
+        not `[seq_len, vocab]`) and applying `lm_head` only at `predict_positions` (one per action
+        token) reduces that tensor from O(seq_len * vocab) to O(num_action_tokens * vocab) --
+        num_action_tokens is a small fraction of seq_len in this repo's tool-calling episodes.
         """
         # self.model.policy resolves through Trainer's loose base-class type (nn.Module | None),
         # so ty can't see .device as a real attribute -- same root cause as the
@@ -402,26 +447,30 @@ class MTPPOTrainer(Trainer):
         # genuine torch.device.
         input_ids = torch.tensor([full_token_ids], device=device)  # ty: ignore[invalid-argument-type]
         mask = torch.tensor(action_mask, device=device, dtype=torch.bool)  # ty: ignore[invalid-argument-type]
-
-        # self.model.policy is untyped/ambiguous to ty (see above), so calling it as
-        # `self.model.policy(...)` looks like a call-non-callable (ty can't confirm it's a
-        # callable nn.Module) with an unresolved-attribute layered on top (ty can't see
-        # `.policy` on self.model's loose base type either). Safe: self.model.policy is provably
-        # an AutoModelForCausalLM instance at runtime, always callable.
-        policy_logits = self.model.policy(input_ids=input_ids).logits[0]  # ty: ignore[call-non-callable, unresolved-attribute]  # [seq_len, vocab]
-        # logits[t] predicts token[t+1]; gather log-prob of the actual next token at each
-        # position, then select the ones landing on action tokens (shifted by one: an action
-        # token at absolute position t was predicted by logits at position t-1).
-        log_probs_all = torch.log_softmax(policy_logits[:-1], dim=-1)
-        next_tokens = input_ids[0, 1:]
-        token_logprobs = log_probs_all.gather(1, next_tokens.unsqueeze(-1)).squeeze(-1)
         action_indices = mask.nonzero(as_tuple=True)[0]
-        action_logprobs = token_logprobs[action_indices - 1]
+        # An action token at absolute position t was predicted by the model's output at position
+        # t-1 (standard next-token-prediction shift).
+        predict_positions = action_indices - 1
+
+        # self.model.policy is untyped/ambiguous to ty (see above), so calling `.model(...)` looks
+        # like a call-non-callable with an unresolved-attribute layered on top (ty can't see
+        # `.model`/`.lm_head` on self.model's loose base type either). Safe: self.model.policy is
+        # provably a real Qwen3_5ForCausalLM instance at runtime, whose `.model` (backbone) and
+        # `.lm_head` (the vocab projection) are both real, always-callable submodules.
+        policy_hidden = self.model.policy.model(input_ids=input_ids).last_hidden_state[0]  # ty: ignore[call-non-callable, unresolved-attribute]  # [seq_len, hidden]
+        selected_hidden = policy_hidden[predict_positions]  # [num_action_tokens, hidden]
+        selected_logits = self.model.policy.lm_head(selected_hidden)  # ty: ignore[call-non-callable, unresolved-attribute]  # [num_action_tokens, vocab]
+        log_probs = torch.log_softmax(selected_logits, dim=-1)
+        next_tokens = input_ids[0, action_indices]
+        action_logprobs = log_probs.gather(1, next_tokens.unsqueeze(-1)).squeeze(-1)
 
         # self.model.critic is untyped/ambiguous to ty for the same reason as self.model.policy
         # above -- `.model` resolves to an unresolved-attribute, and calling the result looks
         # like a call-non-callable. Safe: self.model.critic.model is provably the real
-        # transformer backbone (a PreTrainedModel) at runtime, always callable.
+        # transformer backbone (a PreTrainedModel) at runtime, always callable. The critic's head
+        # (`.score`) projects to a single scalar per position (num_labels=1), not a vocab-sized
+        # dimension, so it never had this method's OOM problem -- computed over the whole
+        # sequence and indexed afterward is fine here.
         critic_hidden = self.model.critic.model(input_ids=input_ids).last_hidden_state  # ty: ignore[call-non-callable, unresolved-attribute]
         # Same root cause one line up: self.model.critic.score is provably a real nn.Linear
         # value head at runtime, always callable, but ty can't see `.score` through self.model's
@@ -546,6 +595,29 @@ class MTPPOTrainer(Trainer):
             self.optimizer.step()  # ty: ignore[unresolved-attribute]
         return {key: value / num_updates for key, value in totals.items()}
 
+    def _save_policy_and_critic(self, output_dir: str) -> None:
+        """Save policy and critic to output_dir/policy and output_dir/critic respectively.
+
+        Deliberately does NOT use the inherited Trainer.save_model()/_save() -- a real bug the
+        live smoke test caught. Trainer's generic _save() calls safetensors.torch.save_file() on
+        self.model.state_dict() directly, which has no idea self.model (_PolicyAndCritic) is
+        wrapping two separate PreTrainedModels with their own tied-weight metadata. Qwen3.5 ties
+        `lm_head.weight` to `model.embed_tokens.weight` (a real, standard weight-tying setup, not
+        a bug in the model), and safetensors refuses to save two keys that share the same
+        underlying storage unless the tied-weight-aware skip/reconstitute logic in
+        PreTrainedModel.save_pretrained() runs first -- confirmed directly: the untouched
+        Trainer.save_model() path raised exactly this "tensors share memory" RuntimeError.
+        Calling each real PreTrainedModel's own .save_pretrained() (which already knows how to
+        skip/reconstitute tied weights) instead of Trainer's generic path fixes this.
+        """
+        output_path = Path(output_dir)
+        output_path.mkdir(parents=True, exist_ok=True)
+        # self.model.policy/.critic are real PreTrainedModel instances at runtime (see
+        # create_optimizer's comment for why ty can't see this through Trainer's loose self.model
+        # type), each with a genuine .save_pretrained() that handles tied weights correctly.
+        self.model.policy.save_pretrained(output_path / "policy")  # ty: ignore[call-non-callable, unresolved-attribute]
+        self.model.critic.save_pretrained(output_path / "critic")  # ty: ignore[call-non-callable, unresolved-attribute]
+
     # train(self) intentionally narrows Trainer.train's full signature
     # (resume_from_checkpoint, trial, ignore_keys_for_eval -> TrainOutput) down to train(self)
     # -> None: PPO's collect-then-multi-epoch-update outer loop replaces Trainer's generic
@@ -666,9 +738,9 @@ class MTPPOTrainer(Trainer):
             self.state.global_step = step + 1
 
             if (step + 1) % self.args.save_steps == 0 if self.args.save_steps else False:
-                self.save_model(f"{self.args.output_dir}/checkpoint-{step + 1}")
+                self._save_policy_and_critic(f"{self.args.output_dir}/checkpoint-{step + 1}")
 
-        self.save_model(f"{self.args.output_dir}/checkpoint-{self.args.max_steps}")
+        self._save_policy_and_critic(f"{self.args.output_dir}/checkpoint-{self.args.max_steps}")
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
