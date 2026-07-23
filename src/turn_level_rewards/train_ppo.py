@@ -19,7 +19,7 @@ from transformers import (
     Trainer,
     TrainingArguments,
 )
-from trl.chat_template_utils import add_response_schema, get_training_chat_template
+from trl.chat_template_utils import add_response_schema, get_training_chat_template, parse_response
 
 from turn_level_rewards.env import SearchEnv
 from turn_level_rewards.rewards import TURN_REWARD_SCALE
@@ -267,3 +267,94 @@ class MTPPOTrainer(Trainer):
             ]
         )
         return self.optimizer
+
+    def _rollout_episode(self, row: dict) -> dict:
+        """Run one multi-turn episode for a single dataset row: real generation, real tool calls
+        against the real retrieval server (via self.environment_factory, e.g. SearchEnv).
+
+        Returns everything downstream needs, all expressed over a "compressed action-token"
+        index space that only counts policy-generated (assistant) tokens -- prompt tokens and
+        tool-response tokens (environment-injected, not sampled by the policy) are excluded from
+        this space entirely, matching how GAE/PPO treat each policy-generated token as one RL
+        timestep:
+          - full_token_ids: every token in the final rendered conversation (prompt + all turns),
+            in order -- fed to the policy/critic for full context.
+          - action_mask: same length as full_token_ids, 1 at positions the policy generated,
+            0 elsewhere.
+          - turn_boundary_action_indices: for each intermediate turn (one that made a tool call,
+            i.e. not the final answering turn), the index INTO THE COMPRESSED ACTION-TOKEN
+            SEQUENCE (not full_token_ids) of that turn's last generated token.
+          - retrieval_fraction_after_each_turn: SearchEnv.retrieval_fraction sampled immediately
+            after that same turn's tool call executed -- one entry per turn_boundary_action_index,
+            same order.
+
+        Relies on get_training_chat_template's prefix-preserving guarantee (confirmed supported
+        for Qwen3.5): each turn's freshly-rendered prompt is guaranteed to start with exactly the
+        tokens already recorded in full_token_ids, so the new suffix at each turn is unambiguous.
+        """
+        environment = self.environment_factory()
+        environment.reset(**row)
+        messages = list(row["prompt"])
+        # self.model is this file's _PolicyAndCritic and self.args is this file's MTPPOConfig at
+        # runtime (both set in __init__/composed by build_ppo_config), but Trainer's base type
+        # stubs only know them as the looser `nn.Module | None` / `TrainingArguments` -- same
+        # ty-can't-see-through-Trainer's-base-types situation already noted on create_optimizer
+        # above. Safe to ignore here for the same reason.
+        policy = self.model.policy  # ty: ignore[unresolved-attribute]
+
+        full_token_ids: list[int] = []
+        action_mask: list[int] = []
+        turn_boundary_action_indices: list[int] = []
+        retrieval_fraction_after_each_turn: list[float] = []
+        num_action_tokens = 0
+
+        for _turn in range(self.args.n_max):  # ty: ignore[unresolved-attribute]
+            prompt_text = self.tokenizer.apply_chat_template(
+                messages,
+                tools=[environment.search],
+                add_generation_prompt=True,
+                chat_template=self.training_chat_template,
+                tokenize=False,
+            )
+            prompt_token_ids = self.tokenizer(prompt_text, add_special_tokens=False)["input_ids"]
+
+            new_context_tokens = prompt_token_ids[len(full_token_ids) :]
+            full_token_ids.extend(new_context_tokens)
+            action_mask.extend([0] * len(new_context_tokens))
+
+            input_ids = torch.tensor([prompt_token_ids], device=policy.device)  # ty: ignore[invalid-argument-type]
+            with torch.no_grad():
+                generation = policy.generate(  # ty: ignore[call-non-callable, unresolved-attribute]
+                    input_ids,
+                    max_new_tokens=self.args.max_completion_length,  # ty: ignore[unresolved-attribute]
+                    do_sample=True,
+                    temperature=1.0,
+                )
+            new_token_ids = generation[0, len(prompt_token_ids) :].tolist()
+            parsed = parse_response(self.tokenizer, new_token_ids, prefix=prompt_token_ids)
+            messages.append(parsed)
+
+            full_token_ids.extend(new_token_ids)
+            action_mask.extend([1] * len(new_token_ids))
+            num_action_tokens += len(new_token_ids)
+
+            tool_calls = parsed.get("tool_calls") or []
+            if not tool_calls:
+                break  # final answer turn -- episode complete
+
+            for tool_call in tool_calls:
+                result = environment.search(**tool_call["function"]["arguments"])
+                messages.append({"role": "tool", "name": "search", "content": result})
+
+            turn_boundary_action_indices.append(num_action_tokens - 1)
+            retrieval_fraction_after_each_turn.append(environment.retrieval_fraction)
+
+        completion = messages[len(row["prompt"]) :]
+        return {
+            "row": row,
+            "completion": completion,
+            "full_token_ids": full_token_ids,
+            "action_mask": action_mask,
+            "turn_boundary_action_indices": turn_boundary_action_indices,
+            "retrieval_fraction_after_each_turn": retrieval_fraction_after_each_turn,
+        }
