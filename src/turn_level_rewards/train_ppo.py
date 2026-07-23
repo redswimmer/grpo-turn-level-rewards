@@ -322,8 +322,14 @@ class MTPPOTrainer(Trainer):
             full_token_ids.extend(new_context_tokens)
             action_mask.extend([0] * len(new_context_tokens))
 
+            # policy.device is a real PreTrainedModel attribute, but ty can't see through the
+            # loose Trainer base-class type annotation on self.model -- same root cause as the
+            # unresolved-attribute suppressions in create_optimizer above.
             input_ids = torch.tensor([prompt_token_ids], device=policy.device)  # ty: ignore[invalid-argument-type]
             with torch.no_grad():
+                # policy.generate is a real PreTrainedModel method, but ty can't see it through
+                # the loose Trainer base-class type annotation -- policy is provably an
+                # AutoModelForCausalLM instance at runtime, always has .generate.
                 generation = policy.generate(  # ty: ignore[call-non-callable, unresolved-attribute]
                     input_ids,
                     max_new_tokens=self.args.max_completion_length,  # ty: ignore[unresolved-attribute]
