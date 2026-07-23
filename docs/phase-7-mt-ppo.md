@@ -212,6 +212,47 @@ metric for the paper's own comparison (reward, and derivatively EM/F1/retrieval_
 reproducible; the raw training-loss internals are not, and Phase 7b should not rely on bit-exact
 loss reproduction across re-runs of the same seed.
 
+**Task 13 review follow-up (2026-07-23, post-reboot): R^I finally captured on disk, not just a
+removed debug print.** The prior smoke test's evidence for `mt_ppo`'s `R^I = 0.4 * 0.5 = 0.2`
+claim (lines above) rested on a temporary print that was removed before commit, and the
+`train_log.jsonl` committed at the time showed `retrieval_fraction: 0.0` for every episode — no
+artifact a reviewer could check independently. After the user rebooted the machine (fixing an
+`nvidia-smi` driver/library version mismatch that was a candidate contributing cause of
+intermittent OOM), both conditions were re-run at the same smoke scale
+(`--train-size 4 --max-steps 2 --num-rollouts-per-step 2`) and this time a real gold-title hit
+landed in `outputs/mt_ppo/train_log.jsonl` on disk:
+
+```json
+{"step": 1, ..., "retrieval_fraction": 0.25, ..., "episodes": [
+  {"question": "What direction does the river that Austrolebias bellotti are found in flow?", "format_and_outcome_reward": -0.1, "retrieval_fraction": 0.0, "num_action_tokens": 67},
+  {"question": "Were both Gabriela Mistral and G. K. Chesterton authors?", "format_and_outcome_reward": -0.1, "retrieval_fraction": 0.5, "num_action_tokens": 149}
+]}
+```
+
+Cross-referencing against `rewards.py`'s `TURN_REWARD_SCALE = 0.4`: `retrieval_fraction: 0.5` for
+the Gabriela Mistral/Chesterton episode means `place_turn_rewards` computed a marginal
+`cumulative_fraction - previous_fraction = 0.5 - 0.0 = 0.5` at that episode's search-hit turn
+boundary, giving `R^I = 0.4 * 0.5 = 0.2` — the exact value the removed debug print had reported
+previously, now backed by a real, inspectable line in `train_log.jsonl` rather than a claim about
+deleted output. The same question, same environment behavior (`retrieval_fraction` rising to
+`0.5`), also appeared in a fresh `--condition ppo` re-run's `train_log.jsonl` at the same step —
+confirming `SearchEnv`'s retrieval tracking is identical across conditions, and that only
+`place_turn_rewards`'s `condition == "mt_ppo"` gate (not the environment) is what makes `R^I`
+nonzero for `mt_ppo` and exactly `0.0` for `ppo` there. Note: `outputs/mt_ppo/train_log.jsonl` is
+append-mode and now also contains stale lines from the pre-reboot inconclusive run and one
+OOM'd attempt (see below) ahead of this run's two real lines — the file is not a clean single-run
+log, but the two lines quoted above are unambiguously this run's (matching this run's printed
+console step summaries exactly).
+
+**Post-reboot OOM-rate observation**: 3 total run attempts across both conditions post-reboot —
+`mt_ppo` OOM'd on attempt 1 (same generic masked-OOM signature documented above) and succeeded on
+attempt 2; `ppo` succeeded on its first attempt. That's 1 OOM in 3 attempts (~33%), in the same
+ballpark as the ~50% pre-reboot rate documented above but on a sample far too small (n=3) to
+conclude the reboot meaningfully changed anything — it neither clearly fixed nor worsened the
+issue. The residual-OOM note above (root cause: Qwen3.5's memory-hungry linear-attention fallback,
+not the driver/library mismatch) still stands as the operative guidance for Phase 7b; this
+reboot's clean `nvidia-smi` driver match was not sufficient by itself to eliminate the OOM.
+
 **For Phase 8 (LLM judge, built on top of a working Phase 7)**: the `outcome_reward` call in
 `_collect_batch` is a single, clearly isolated call site (`outcome_r = outcome_reward([completion],
 [row["golden_answers"]])[0]`) — swapping in an LLM-judge-based reward function there should be a
