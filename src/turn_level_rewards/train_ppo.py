@@ -364,3 +364,40 @@ class MTPPOTrainer(Trainer):
             "turn_boundary_action_indices": turn_boundary_action_indices,
             "retrieval_fraction_after_each_turn": retrieval_fraction_after_each_turn,
         }
+
+    def _forward_logprobs_and_values(
+        self, full_token_ids: list[int], action_mask: list[int]
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Teacher-forced forward pass over one episode's full token sequence.
+
+        Returns (action_logprobs, action_values), both 1-D tensors of length sum(action_mask) --
+        one entry per action (policy-generated) token, in the same order as
+        _rollout_episode's turn_boundary_action_indices.
+
+        Called twice per episode per PPO update: once under torch.no_grad() right after rollout
+        (the frozen "old" reference for the clip ratio, GAE, and the KL term), and once per PPO
+        inner epoch WITH grad (the "new" values that get backpropagated).
+        """
+        # self.model.policy/self.model.critic resolve through Trainer's loose base-class type
+        # (nn.Module | None), same root cause as the unresolved-attribute/call-non-callable
+        # suppressions already used in create_optimizer and _rollout_episode above -- both are
+        # provably real PreTrainedModel instances at runtime.
+        device = self.model.policy.device  # ty: ignore[unresolved-attribute]
+        input_ids = torch.tensor([full_token_ids], device=device)  # ty: ignore[invalid-argument-type]
+        mask = torch.tensor(action_mask, device=device, dtype=torch.bool)  # ty: ignore[invalid-argument-type]
+
+        policy_logits = self.model.policy(input_ids=input_ids).logits[0]  # ty: ignore[call-non-callable, unresolved-attribute]  # [seq_len, vocab]
+        # logits[t] predicts token[t+1]; gather log-prob of the actual next token at each
+        # position, then select the ones landing on action tokens (shifted by one: an action
+        # token at absolute position t was predicted by logits at position t-1).
+        log_probs_all = torch.log_softmax(policy_logits[:-1], dim=-1)
+        next_tokens = input_ids[0, 1:]
+        token_logprobs = log_probs_all.gather(1, next_tokens.unsqueeze(-1)).squeeze(-1)
+        action_indices = mask.nonzero(as_tuple=True)[0]
+        action_logprobs = token_logprobs[action_indices - 1]
+
+        critic_hidden = self.model.critic.model(input_ids=input_ids).last_hidden_state  # ty: ignore[call-non-callable, unresolved-attribute]
+        critic_values = self.model.critic.score(critic_hidden).squeeze(-1)[0]  # ty: ignore[call-non-callable, unresolved-attribute]  # [seq_len]
+        action_values = critic_values[action_indices]
+
+        return action_logprobs, action_values
