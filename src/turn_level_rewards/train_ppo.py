@@ -9,6 +9,8 @@ unmodified. See CLAUDE.md's Goal section and docs/phase-7-mt-ppo.md for the full
 
 from typing import Literal
 
+import torch
+
 from turn_level_rewards.rewards import TURN_REWARD_SCALE
 
 Condition = Literal["ppo", "mt_ppo"]
@@ -84,3 +86,43 @@ def place_turn_rewards(
             per_token_rewards[token_index] += turn_reward_scale * marginal
             previous_fraction = cumulative_fraction
     return per_token_rewards
+
+
+def _masked_mean(values: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+    return (values * mask).sum() / mask.sum().clamp(min=1.0)
+
+
+def compute_ppo_loss(
+    new_logprobs: torch.Tensor,
+    old_logprobs: torch.Tensor,
+    advantages: torch.Tensor,
+    returns: torch.Tensor,
+    new_values: torch.Tensor,
+    action_mask: torch.Tensor,
+    clip_eps: float = 0.2,
+    kl_beta: float = 0.001,
+    value_loss_coef: float = 0.5,
+) -> dict[str, torch.Tensor]:
+    """PPO-clip policy loss + value loss + a direct KL penalty term, all masked to action tokens.
+
+    action_mask is 1.0 at positions that are real policy-generated action tokens, 0.0 elsewhere
+    (prompt tokens, tool-response tokens injected by the environment, padding) -- none of those
+    should ever receive policy gradient. The KL term uses old_logprobs (the rollout-time, frozen
+    policy snapshot) as the reference throughout every one of this batch's inner PPO epochs --
+    not a separate frozen reference model the way GRPO's beta works (see the design spec's
+    stated assumption on this point). Both the clip and the KL term are applied together, not
+    either/or, per the paper's spec.
+    """
+    ratio = torch.exp(new_logprobs - old_logprobs)
+    unclipped = ratio * advantages
+    clipped = torch.clamp(ratio, 1.0 - clip_eps, 1.0 + clip_eps) * advantages
+    policy_loss = -_masked_mean(torch.min(unclipped, clipped), action_mask)
+    value_loss = _masked_mean((new_values - returns) ** 2, action_mask)
+    kl = _masked_mean(new_logprobs - old_logprobs, action_mask)
+    loss = policy_loss + value_loss_coef * value_loss + kl_beta * kl
+    return {
+        "loss": loss,
+        "policy_loss": policy_loss.detach(),
+        "value_loss": value_loss.detach(),
+        "kl": kl.detach(),
+    }

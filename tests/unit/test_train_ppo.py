@@ -5,7 +5,9 @@ construction require a real model/chat-template, which is exactly what the live 
 (not tests/unit/) validates instead, per CLAUDE.md's Guiding principles.
 """
 
-from turn_level_rewards.train_ppo import compute_gae, place_turn_rewards
+import pytest
+import torch
+from turn_level_rewards.train_ppo import compute_gae, compute_ppo_loss, place_turn_rewards
 
 
 def test_compute_gae_matches_hand_computed_returns_minus_baseline_at_gamma_lambda_one():
@@ -37,8 +39,6 @@ def test_compute_gae_nonzero_bootstrap_value_feeds_into_final_step():
 
 
 def test_compute_gae_rejects_mismatched_lengths():
-    import pytest
-
     with pytest.raises(ValueError, match="equal length"):
         compute_gae(rewards=[1.0, 2.0], values=[0.5])
 
@@ -118,8 +118,6 @@ def test_place_turn_rewards_defaults_turn_reward_scale_to_the_shared_constant():
 
 
 def test_place_turn_rewards_rejects_mismatched_boundary_and_fraction_lengths():
-    import pytest
-
     with pytest.raises(ValueError, match="equal length"):
         place_turn_rewards(
             num_tokens=5,
@@ -128,3 +126,84 @@ def test_place_turn_rewards_rejects_mismatched_boundary_and_fraction_lengths():
             format_and_outcome_reward=0.0,
             condition="mt_ppo",
         )
+
+
+def test_compute_ppo_loss_zero_advantage_and_matched_values_gives_only_kl_term():
+    """advantages=0 -> policy_loss term is 0 regardless of ratio; new_values==returns ->
+    value_loss is 0; new_logprobs==old_logprobs -> ratio==1 and kl==0. Total loss should be
+    exactly 0.0 in this fully-matched case.
+    """
+    result = compute_ppo_loss(
+        new_logprobs=torch.tensor([0.1, 0.2, 0.3]),
+        old_logprobs=torch.tensor([0.1, 0.2, 0.3]),
+        advantages=torch.tensor([0.0, 0.0, 0.0]),
+        returns=torch.tensor([1.0, 1.0, 1.0]),
+        new_values=torch.tensor([1.0, 1.0, 1.0]),
+        action_mask=torch.tensor([1.0, 1.0, 1.0]),
+    )
+
+    assert result["loss"].item() == 0.0
+    assert result["policy_loss"].item() == 0.0
+    assert result["value_loss"].item() == 0.0
+    assert result["kl"].item() == 0.0
+
+
+def test_compute_ppo_loss_clips_large_positive_ratio_on_positive_advantage():
+    """A large ratio (new much more likely than old) on positive advantage should be clipped to
+    (1+clip_eps), not allowed to blow up the policy objective unbounded.
+    """
+    result = compute_ppo_loss(
+        new_logprobs=torch.tensor([10.0]),  # ratio = exp(10) >> 1 + clip_eps
+        old_logprobs=torch.tensor([0.0]),
+        advantages=torch.tensor([1.0]),
+        returns=torch.tensor([0.0]),
+        new_values=torch.tensor([0.0]),
+        action_mask=torch.tensor([1.0]),
+        clip_eps=0.2,
+        kl_beta=0.0,
+        value_loss_coef=0.0,
+    )
+
+    # unclipped would be -(exp(10) * 1.0); clipped surrogate must use min(unclipped, clipped) --
+    # since advantage is positive, clipping caps the objective at 1.2 * 1.0, so policy_loss is
+    # exactly -1.2, not some huge negative number.
+    assert result["policy_loss"].item() == pytest.approx(-1.2, abs=1e-4)
+
+
+def test_compute_ppo_loss_masks_out_non_action_positions():
+    """A masked-out position (action_mask=0) with wildly wrong values must not affect the loss at
+    all -- only masked-in (action_mask=1) positions should contribute.
+    """
+    masked_result = compute_ppo_loss(
+        new_logprobs=torch.tensor([0.0, 999.0]),
+        old_logprobs=torch.tensor([0.0, -999.0]),
+        advantages=torch.tensor([0.0, 999.0]),
+        returns=torch.tensor([1.0, -999.0]),
+        new_values=torch.tensor([1.0, 999.0]),
+        action_mask=torch.tensor([1.0, 0.0]),
+    )
+    unmasked_result = compute_ppo_loss(
+        new_logprobs=torch.tensor([0.0]),
+        old_logprobs=torch.tensor([0.0]),
+        advantages=torch.tensor([0.0]),
+        returns=torch.tensor([1.0]),
+        new_values=torch.tensor([1.0]),
+        action_mask=torch.tensor([1.0]),
+    )
+
+    assert masked_result["loss"].item() == pytest.approx(unmasked_result["loss"].item())
+
+
+def test_compute_ppo_loss_value_loss_scales_with_squared_error():
+    result = compute_ppo_loss(
+        new_logprobs=torch.tensor([0.0]),
+        old_logprobs=torch.tensor([0.0]),
+        advantages=torch.tensor([0.0]),
+        returns=torch.tensor([3.0]),
+        new_values=torch.tensor([1.0]),
+        action_mask=torch.tensor([1.0]),
+        kl_beta=0.0,
+    )
+
+    assert result["value_loss"].item() == pytest.approx(4.0)  # (1.0 - 3.0)**2
+    assert result["loss"].item() == pytest.approx(0.5 * 4.0)  # value_loss_coef defaults to 0.5
