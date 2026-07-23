@@ -7,13 +7,71 @@ docs/superpowers/specs/2026-07-05-phase-7-mt-ppo-design.md). Reuses SearchEnv/re
 unmodified. See CLAUDE.md's Goal section and docs/phase-7-mt-ppo.md for the full design.
 """
 
+from dataclasses import dataclass
 from typing import Literal
 
 import torch
+from transformers import TrainingArguments
 
 from turn_level_rewards.rewards import TURN_REWARD_SCALE
 
 Condition = Literal["ppo", "mt_ppo"]
+
+MODEL_NAME = "Qwen/Qwen3.5-0.8B"
+
+
+@dataclass
+class MTPPOConfig(TrainingArguments):
+    """Config for MTPPOTrainer. Subclasses TrainingArguments the same way TRL's GRPOConfig does,
+    adding this trainer's own fixed hyperparameters (see this plan's Global Constraints section
+    for where each value comes from).
+    """
+
+    condition: Condition = "ppo"
+    n_max: int = 4
+    clip_eps: float = 0.2
+    kl_beta: float = 0.001
+    policy_lr: float = 1e-6
+    critic_lr: float = 1e-5
+    gamma: float = 1.0
+    gae_lambda: float = 1.0
+    num_ppo_epochs: int = 4
+    value_loss_coef: float = 0.5
+    num_rollouts_per_step: int = 2
+    max_completion_length: int = 2048
+    project: str = "turn-level-rewards-ppo"
+
+
+def build_ppo_config(
+    condition: Condition,
+    seed: int,
+    max_steps: int,
+    num_rollouts_per_step: int,
+) -> MTPPOConfig:
+    """Build the MTPPOConfig for a training run. Mirrors train.py's build_config role from
+    Phase 4 -- fixed hyperparameters are baked in here, not exposed as independent CLI flags.
+    """
+    return MTPPOConfig(
+        output_dir=f"outputs/{condition}",
+        seed=seed,
+        max_steps=max_steps,
+        condition=condition,
+        n_max=4,
+        clip_eps=0.2,
+        kl_beta=0.001,
+        policy_lr=1e-6,
+        critic_lr=1e-5,
+        gamma=1.0,
+        gae_lambda=1.0,
+        num_ppo_epochs=4,
+        value_loss_coef=0.5,
+        num_rollouts_per_step=num_rollouts_per_step,
+        max_completion_length=2048,
+        logging_steps=1,
+        run_name=condition,
+        report_to="none",  # trackio is called directly in MTPPOTrainer.train(), not through
+        # transformers' generic report_to integration -- see Task 8.
+    )
 
 
 def compute_gae(

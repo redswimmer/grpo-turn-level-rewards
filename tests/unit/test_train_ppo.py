@@ -7,7 +7,12 @@ construction require a real model/chat-template, which is exactly what the live 
 
 import pytest
 import torch
-from turn_level_rewards.train_ppo import compute_gae, compute_ppo_loss, place_turn_rewards
+from turn_level_rewards.train_ppo import (
+    build_ppo_config,
+    compute_gae,
+    compute_ppo_loss,
+    place_turn_rewards,
+)
 
 
 def test_compute_gae_matches_hand_computed_returns_minus_baseline_at_gamma_lambda_one():
@@ -207,3 +212,44 @@ def test_compute_ppo_loss_value_loss_scales_with_squared_error():
 
     assert result["value_loss"].item() == pytest.approx(4.0)  # (1.0 - 3.0)**2
     assert result["loss"].item() == pytest.approx(0.5 * 4.0)  # value_loss_coef defaults to 0.5
+
+
+def test_build_ppo_config_fixed_hyperparameters_identical_across_conditions():
+    """These come from the paper (Section 6.2/C.1.3) or the design spec's stated assumptions --
+    every one must hold for BOTH conditions, since ppo/mt_ppo differ only in reward placement
+    (Eq. 9), not in any of these hyperparameters.
+    """
+    ppo_config = build_ppo_config("ppo", seed=42, max_steps=2, num_rollouts_per_step=2)
+    mt_ppo_config = build_ppo_config("mt_ppo", seed=42, max_steps=2, num_rollouts_per_step=2)
+
+    for config in (ppo_config, mt_ppo_config):
+        assert config.n_max == 4
+        assert config.clip_eps == 0.2
+        assert config.kl_beta == 0.001
+        assert config.policy_lr == 1e-6
+        assert config.critic_lr == 1e-5
+        assert config.gamma == 1.0
+        assert config.gae_lambda == 1.0
+        assert config.num_ppo_epochs == 4
+        assert config.value_loss_coef == 0.5
+        assert config.max_completion_length == 2048
+
+
+def test_build_ppo_config_condition_and_derived_fields_differ():
+    ppo_config = build_ppo_config("ppo", seed=42, max_steps=2, num_rollouts_per_step=2)
+    mt_ppo_config = build_ppo_config("mt_ppo", seed=42, max_steps=2, num_rollouts_per_step=2)
+
+    assert ppo_config.condition == "ppo"
+    assert mt_ppo_config.condition == "mt_ppo"
+    assert ppo_config.output_dir == "outputs/ppo"
+    assert mt_ppo_config.output_dir == "outputs/mt_ppo"
+    assert ppo_config.run_name == "ppo"
+    assert mt_ppo_config.run_name == "mt_ppo"
+
+
+def test_build_ppo_config_passes_through_seed_max_steps_and_rollout_count():
+    config = build_ppo_config("ppo", seed=7, max_steps=500, num_rollouts_per_step=8)
+
+    assert config.seed == 7
+    assert config.max_steps == 500
+    assert config.num_rollouts_per_step == 8
