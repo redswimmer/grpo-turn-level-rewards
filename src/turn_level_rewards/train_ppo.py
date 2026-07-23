@@ -9,6 +9,8 @@ unmodified. See CLAUDE.md's Goal section and docs/phase-7-mt-ppo.md for the full
 
 from typing import Literal
 
+from turn_level_rewards.rewards import TURN_REWARD_SCALE
+
 Condition = Literal["ppo", "mt_ppo"]
 
 
@@ -40,3 +42,45 @@ def compute_gae(
         advantages[t] = running_gae
         next_value = values[t]
     return advantages
+
+
+def place_turn_rewards(
+    num_tokens: int,
+    turn_boundary_token_indices: list[int],
+    retrieval_fraction_after_each_turn: list[float],
+    format_and_outcome_reward: float,
+    condition: Condition,
+    turn_reward_scale: float = TURN_REWARD_SCALE,
+) -> list[float]:
+    """Eq. 9 turn-boundary reward placement.
+
+    R^O (format_reward + outcome_reward, summed by the caller) always lands on the trajectory's
+    last token. R^I -- turn_reward's marginal per-turn contribution -- lands at each intermediate
+    turn boundary, mt_ppo only; always 0 for ppo (single lump-sum credit assignment even across a
+    multi-turn episode, per the paper's Eq. 9).
+
+    turn_boundary_token_indices and retrieval_fraction_after_each_turn operate over whatever
+    token-index space the caller is using (this repo's MTPPOTrainer uses action-token-relative
+    indices, i.e. only counting policy-generated tokens -- see _rollout_episode's docstring).
+    retrieval_fraction_after_each_turn[i] is SearchEnv.retrieval_fraction sampled immediately
+    after intermediate turn i's tool call executed. retrieval_fraction is monotonically
+    non-decreasing (SearchEnv only ever adds to its hit set), so each turn's real, marginal
+    contribution is that turn's value minus the previous turn's (0.0 before the first turn) --
+    not the raw cumulative value, which would double-count every later turn's reward.
+    """
+    if len(turn_boundary_token_indices) != len(retrieval_fraction_after_each_turn):
+        raise ValueError(
+            "turn_boundary_token_indices and retrieval_fraction_after_each_turn must be equal "
+            "length"
+        )
+    per_token_rewards = [0.0] * num_tokens
+    per_token_rewards[-1] += format_and_outcome_reward
+    if condition == "mt_ppo":
+        previous_fraction = 0.0
+        for token_index, cumulative_fraction in zip(
+            turn_boundary_token_indices, retrieval_fraction_after_each_turn, strict=True
+        ):
+            marginal = cumulative_fraction - previous_fraction
+            per_token_rewards[token_index] += turn_reward_scale * marginal
+            previous_fraction = cumulative_fraction
+    return per_token_rewards
