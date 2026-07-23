@@ -378,14 +378,26 @@ class MTPPOTrainer(Trainer):
         (the frozen "old" reference for the clip ratio, GAE, and the KL term), and once per PPO
         inner epoch WITH grad (the "new" values that get backpropagated).
         """
-        # self.model.policy/self.model.critic resolve through Trainer's loose base-class type
-        # (nn.Module | None), same root cause as the unresolved-attribute/call-non-callable
-        # suppressions already used in create_optimizer and _rollout_episode above -- both are
-        # provably real PreTrainedModel instances at runtime.
+        # self.model.policy resolves through Trainer's loose base-class type (nn.Module | None),
+        # so ty can't see .device as a real attribute -- same root cause as the
+        # unresolved-attribute suppressions already used in create_optimizer and
+        # _rollout_episode above. Safe: self.model.policy is provably a real PreTrainedModel
+        # instance at runtime, always has a genuine .device.
         device = self.model.policy.device  # ty: ignore[unresolved-attribute]
+        # device's type is therefore unresolved/ambiguous to ty (see immediately above), so it
+        # can't confirm device is a valid torch.device-compatible value for the `device=` kwarg
+        # on either torch.tensor(...) call below -- the same unresolved-attribute-propagates-
+        # into-invalid-argument-type chain _rollout_episode's input_ids construction already
+        # explains for policy.device. Safe for the same reason: at runtime device is always a
+        # genuine torch.device.
         input_ids = torch.tensor([full_token_ids], device=device)  # ty: ignore[invalid-argument-type]
         mask = torch.tensor(action_mask, device=device, dtype=torch.bool)  # ty: ignore[invalid-argument-type]
 
+        # self.model.policy is untyped/ambiguous to ty (see above), so calling it as
+        # `self.model.policy(...)` looks like a call-non-callable (ty can't confirm it's a
+        # callable nn.Module) with an unresolved-attribute layered on top (ty can't see
+        # `.policy` on self.model's loose base type either). Safe: self.model.policy is provably
+        # an AutoModelForCausalLM instance at runtime, always callable.
         policy_logits = self.model.policy(input_ids=input_ids).logits[0]  # ty: ignore[call-non-callable, unresolved-attribute]  # [seq_len, vocab]
         # logits[t] predicts token[t+1]; gather log-prob of the actual next token at each
         # position, then select the ones landing on action tokens (shifted by one: an action
@@ -396,7 +408,14 @@ class MTPPOTrainer(Trainer):
         action_indices = mask.nonzero(as_tuple=True)[0]
         action_logprobs = token_logprobs[action_indices - 1]
 
+        # self.model.critic is untyped/ambiguous to ty for the same reason as self.model.policy
+        # above -- `.model` resolves to an unresolved-attribute, and calling the result looks
+        # like a call-non-callable. Safe: self.model.critic.model is provably the real
+        # transformer backbone (a PreTrainedModel) at runtime, always callable.
         critic_hidden = self.model.critic.model(input_ids=input_ids).last_hidden_state  # ty: ignore[call-non-callable, unresolved-attribute]
+        # Same root cause one line up: self.model.critic.score is provably a real nn.Linear
+        # value head at runtime, always callable, but ty can't see `.score` through self.model's
+        # loose base type either.
         critic_values = self.model.critic.score(critic_hidden).squeeze(-1)[0]  # ty: ignore[call-non-callable, unresolved-attribute]  # [seq_len]
         action_values = critic_values[action_indices]
 
