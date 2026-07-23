@@ -22,7 +22,7 @@ from transformers import (
 from trl.chat_template_utils import add_response_schema, get_training_chat_template, parse_response
 
 from turn_level_rewards.env import SearchEnv
-from turn_level_rewards.rewards import TURN_REWARD_SCALE
+from turn_level_rewards.rewards import TURN_REWARD_SCALE, format_reward, outcome_reward
 
 Condition = Literal["ppo", "mt_ppo"]
 
@@ -420,3 +420,66 @@ class MTPPOTrainer(Trainer):
         action_values = critic_values[action_indices]
 
         return action_logprobs, action_values
+
+    def _collect_batch(self, rows: list[dict]) -> list[dict]:
+        """Roll out one episode per row, score it, and compute its frozen GAE inputs.
+
+        Not unit-tested -- calls _rollout_episode (real model/tool-calls) and
+        _forward_logprobs_and_values (real forward pass) for each row. Validated by the live
+        smoke test (Task 11).
+        """
+        episodes = []
+        for row in rows:
+            rollout = self._rollout_episode(row)
+
+            with torch.no_grad():
+                old_logprobs, old_values = self._forward_logprobs_and_values(
+                    rollout["full_token_ids"], rollout["action_mask"]
+                )
+
+            completion = rollout["completion"]
+            format_r = format_reward([completion])[0]
+            outcome_r = outcome_reward([completion], [row["golden_answers"]])[0]
+            format_and_outcome_reward = format_r + outcome_r
+
+            retrieval_fraction = (
+                rollout["retrieval_fraction_after_each_turn"][-1]
+                if rollout["retrieval_fraction_after_each_turn"]
+                else 0.0
+            )
+
+            per_token_rewards = place_turn_rewards(
+                num_tokens=len(old_values),
+                turn_boundary_token_indices=rollout["turn_boundary_action_indices"],
+                retrieval_fraction_after_each_turn=rollout["retrieval_fraction_after_each_turn"],
+                format_and_outcome_reward=format_and_outcome_reward,
+                condition=self.condition,
+            )
+            # self.args.gamma and self.args.gae_lambda are real fields on this file's
+            # MTPPOConfig (set in build_ppo_config), but Trainer's base type stub only knows
+            # self.args as the looser `TrainingArguments` -- same ty-can't-see-through-Trainer's
+            # -base-types root cause already noted on self.args.n_max in _rollout_episode above.
+            # Safe to ignore here for the same reason.
+            advantages = compute_gae(
+                rewards=per_token_rewards,
+                values=old_values.tolist(),
+                gamma=self.args.gamma,  # ty: ignore[unresolved-attribute]
+                lam=self.args.gae_lambda,  # ty: ignore[unresolved-attribute]
+            )
+            returns = [a + v for a, v in zip(advantages, old_values.tolist(), strict=True)]
+
+            episodes.append(
+                {
+                    "full_token_ids": rollout["full_token_ids"],
+                    "action_mask": rollout["action_mask"],
+                    "old_logprobs": old_logprobs,
+                    "old_values": old_values,
+                    "advantages": torch.tensor(advantages, device=old_values.device),
+                    "returns": torch.tensor(returns, device=old_values.device),
+                    "format_and_outcome_reward": format_and_outcome_reward,
+                    "retrieval_fraction": retrieval_fraction,
+                    "question": row["question"],
+                    "completion": completion,
+                }
+            )
+        return episodes
