@@ -7,7 +7,10 @@ construction require a real model/chat-template, which is exactly what the live 
 
 import pytest
 import torch
+import torch.nn as nn
 from turn_level_rewards.train_ppo import (
+    MTPPOTrainer,
+    _PolicyAndCritic,
     build_ppo_config,
     compute_gae,
     compute_ppo_loss,
@@ -253,3 +256,33 @@ def test_build_ppo_config_passes_through_seed_max_steps_and_rollout_count():
     assert config.seed == 7
     assert config.max_steps == 500
     assert config.num_rollouts_per_step == 8
+
+
+class _FakePolicy(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.linear = nn.Linear(4, 4)
+
+
+class _FakeCritic(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.linear = nn.Linear(4, 1)
+
+
+def test_create_optimizer_uses_two_param_groups_with_paper_learning_rates(tmp_path):
+    config = build_ppo_config("ppo", seed=42, max_steps=2, num_rollouts_per_step=2)
+    config.output_dir = str(tmp_path)
+    model = _PolicyAndCritic(_FakePolicy(), _FakeCritic())
+    trainer = MTPPOTrainer.__new__(MTPPOTrainer)  # bypass __init__ (needs a real tokenizer)
+    trainer.model = model
+    trainer.args = config
+
+    optimizer = trainer.create_optimizer()
+
+    assert len(optimizer.param_groups) == 2
+    policy_group, critic_group = optimizer.param_groups
+    assert policy_group["lr"] == 1e-6
+    assert critic_group["lr"] == 1e-5
+    assert list(policy_group["params"]) == list(model.policy.parameters())
+    assert list(critic_group["params"]) == list(model.critic.parameters())

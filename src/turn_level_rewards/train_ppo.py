@@ -11,8 +11,17 @@ from dataclasses import dataclass
 from typing import Literal
 
 import torch
-from transformers import TrainingArguments
+import torch.nn as nn
+from transformers import (
+    AutoModelForCausalLM,
+    AutoModelForSequenceClassification,
+    PreTrainedModel,
+    Trainer,
+    TrainingArguments,
+)
+from trl.chat_template_utils import add_response_schema, get_training_chat_template
 
+from turn_level_rewards.env import SearchEnv
 from turn_level_rewards.rewards import TURN_REWARD_SCALE
 
 Condition = Literal["ppo", "mt_ppo"]
@@ -184,3 +193,69 @@ def compute_ppo_loss(
         "value_loss": value_loss.detach(),
         "kl": kl.detach(),
     }
+
+
+class _PolicyAndCritic(nn.Module):
+    """Wraps the policy (causal LM) and critic (sequence-classification head) as one nn.Module.
+
+    Lets Trainer's standard model/optimizer/checkpoint plumbing see both submodules through a
+    single self.model, while create_optimizer still gives them independent learning rates (the
+    paper's own spec: policy_lr=1e-6, critic_lr=1e-5) via separate param groups.
+    """
+
+    def __init__(self, policy: PreTrainedModel, critic: PreTrainedModel) -> None:
+        super().__init__()
+        self.policy = policy
+        self.critic = critic
+
+
+def build_policy_and_critic(model_name: str = MODEL_NAME) -> _PolicyAndCritic:
+    """Real policy + real critic, both loaded from the same base checkpoint -- separate models,
+    not a shared backbone (the paper's own spec). Not unit-tested: loads real weights: validated
+    by the live smoke test (Task 11) instead.
+    """
+    policy = AutoModelForCausalLM.from_pretrained(model_name, dtype=torch.bfloat16)
+    critic = AutoModelForSequenceClassification.from_pretrained(
+        model_name, num_labels=1, dtype=torch.bfloat16
+    )
+    return _PolicyAndCritic(policy, critic)
+
+
+class MTPPOTrainer(Trainer):
+    """Custom multi-turn PPO trainer with tool-calling, built directly on transformers.Trainer.
+
+    Owns: the rollout loop (render with tools -> generate -> parse_response -> execute
+    SearchEnv.search() on a tool call -> append tool message -> repeat up to args.n_max turns ->
+    require a final <answer>), the critic forward pass, Eq. 9 reward placement, GAE, and the
+    PPO-clip + KL-penalty + value-loss update. Turn-level credit assignment for mt_ppo falls out
+    of reward placement + GAE bootstrapping alone -- no MT-GRPO-style extra-rollout advantage
+    trick is needed here (PPO already has a real per-token critic). See
+    docs/superpowers/specs/2026-07-05-phase-7-mt-ppo-design.md's Context section for why this is
+    built on transformers.Trainer directly rather than subclassing GRPOTrainer/PPOTrainer.
+    """
+
+    def __init__(
+        self,
+        condition: Condition,
+        model: _PolicyAndCritic,
+        tokenizer,
+        train_dataset,
+        args: MTPPOConfig,
+        environment_factory=None,
+        callbacks=None,
+    ) -> None:
+        self.condition = condition
+        self.environment_factory = environment_factory or SearchEnv
+        super().__init__(model=model, args=args, train_dataset=train_dataset, callbacks=callbacks)
+        self.tokenizer = add_response_schema(tokenizer)
+        self.training_chat_template = get_training_chat_template(self.tokenizer)
+
+    def create_optimizer(self) -> torch.optim.Optimizer:  # ty: ignore[invalid-method-override]
+        """One AdamW, two param groups -- policy_lr / critic_lr per the paper's spec (10x apart)."""
+        self.optimizer = torch.optim.AdamW(
+            [
+                {"params": self.model.policy.parameters(), "lr": self.args.policy_lr},  # ty: ignore[unresolved-attribute]
+                {"params": self.model.critic.parameters(), "lr": self.args.critic_lr},  # ty: ignore[unresolved-attribute]
+            ]
+        )
+        return self.optimizer
