@@ -10,6 +10,7 @@ import torch
 import torch.nn as nn
 from turn_level_rewards.train_ppo import (
     MTPPOTrainer,
+    _parse_args,
     _PolicyAndCritic,
     build_ppo_config,
     compute_gae,
@@ -286,3 +287,46 @@ def test_create_optimizer_uses_two_param_groups_with_paper_learning_rates(tmp_pa
     assert critic_group["lr"] == 1e-5
     assert list(policy_group["params"]) == list(model.policy.parameters())
     assert list(critic_group["params"]) == list(model.critic.parameters())
+
+
+def test_parse_args_defaults():
+    args = _parse_args(["--condition", "ppo"])
+
+    assert args.condition == "ppo"
+    assert args.seed == 42
+    assert args.train_size == 8
+    assert args.max_steps == 2
+    assert args.num_rollouts_per_step == 2
+
+
+def test_parse_args_condition_required():
+    with pytest.raises(SystemExit):
+        _parse_args([])
+
+
+def test_parse_args_condition_choices_enforced():
+    with pytest.raises(SystemExit):
+        _parse_args(["--condition", "not_a_real_condition"])
+
+
+def test_parse_args_overrides():
+    args = _parse_args(
+        [
+            "--condition",
+            "mt_ppo",
+            "--seed",
+            "7",
+            "--train-size",
+            "90447",
+            "--max-steps",
+            "500",
+            "--num-rollouts-per-step",
+            "8",
+        ]
+    )
+
+    assert args.condition == "mt_ppo"
+    assert args.seed == 7
+    assert args.train_size == 90447
+    assert args.max_steps == 500
+    assert args.num_rollouts_per_step == 8

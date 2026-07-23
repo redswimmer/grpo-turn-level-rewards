@@ -7,10 +7,12 @@ docs/superpowers/specs/2026-07-05-phase-7-mt-ppo-design.md). Reuses SearchEnv/re
 unmodified. See CLAUDE.md's Goal section and docs/phase-7-mt-ppo.md for the full design.
 """
 
+import argparse
 import itertools
 import json
 import time
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Literal
 
@@ -667,3 +669,63 @@ class MTPPOTrainer(Trainer):
                 self.save_model(f"{self.args.output_dir}/checkpoint-{step + 1}")
 
         self.save_model(f"{self.args.output_dir}/checkpoint-{self.args.max_steps}")
+
+
+def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    """Parse train_ppo.py's CLI arguments. Mirrors train.py's _parse_args pattern from Phase 4 --
+    the bare invocation (just --condition) is a tiny smoke-test-scale run; full runs (Phase 7b)
+    must explicitly override --train-size/--max-steps/--num-rollouts-per-step.
+    """
+    parser = argparse.ArgumentParser(
+        description="Train multi-turn PPO/MT-PPO (see CLAUDE.md and docs/phase-7-mt-ppo.md)."
+    )
+    parser.add_argument("--condition", required=True, choices=["ppo", "mt_ppo"])
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--train-size", type=int, default=8)
+    parser.add_argument("--max-steps", type=int, default=2)
+    parser.add_argument("--num-rollouts-per-step", type=int, default=2)
+    return parser.parse_args(argv)
+
+
+def build_ppo_trainer(
+    condition: Condition,
+    train_size: int | None,
+    config: MTPPOConfig,
+) -> MTPPOTrainer:
+    """Composition root: real policy+critic, real SearchEnv (hits the live retrieval server),
+    real data. Not unit-tested -- this is exactly the integration surface the live smoke test
+    validates, same principle as train.py's build_trainer.
+    """
+    from transformers import AutoTokenizer
+
+    from turn_level_rewards import data
+
+    model = build_policy_and_critic(MODEL_NAME)
+    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+    train_dataset = data.load_train_dataset(n=train_size, seed=config.seed)
+    return MTPPOTrainer(
+        condition=condition,
+        model=model,
+        tokenizer=tokenizer,
+        train_dataset=train_dataset,
+        args=config,
+    )
+
+
+def main() -> None:
+    args = _parse_args()
+    config = build_ppo_config(
+        condition=args.condition,
+        seed=args.seed,
+        max_steps=args.max_steps,
+        num_rollouts_per_step=args.num_rollouts_per_step,
+    )
+    config.run_name = (
+        f"{args.condition}-{args.max_steps}steps-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+    )
+    trainer = build_ppo_trainer(args.condition, args.train_size, config)
+    trainer.train()
+
+
+if __name__ == "__main__":
+    main()
