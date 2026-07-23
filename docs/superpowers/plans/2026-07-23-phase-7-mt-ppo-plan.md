@@ -1116,6 +1116,14 @@ git commit -m "train_ppo: add MTPPOTrainer._forward_logprobs_and_values"
 
 ---
 
+> **Amendment (added after Task 7 landed, during execution):** the user asked for detailed
+> diagnostic logging (so a failed or surprising run can be diagnosed without rerunning it),
+> deterministic repeatability, and progress visibility on long runs. Tasks 9, 10, and 13 below
+> were revised to add this before they were implemented — `_collect_batch` now carries
+> `question`/`completion` through to `train()`, `train()` calls `set_seed` and writes two
+> diagnostic artifacts (`train_log.jsonl`, `sample_completions.log`) plus a stdout progress line,
+> and Task 13's smoke test verifies both artifacts are actually populated with real content.
+
 ### Task 9: `_collect_batch` (real model, not unit-tested)
 
 **Files:**
@@ -1127,8 +1135,11 @@ git commit -m "train_ppo: add MTPPOTrainer._forward_logprobs_and_values"
   `rewards.outcome_reward`.
 - Produces: `MTPPOTrainer._collect_batch(self, rows: list[dict]) -> list[dict]` — one dict per
   episode with keys `full_token_ids`, `action_mask`, `old_logprobs`, `old_values`, `advantages`,
-  `returns`, plus logging fields `format_and_outcome_reward`, `exact_match`, `f1`,
-  `retrieval_fraction` — consumed by Task 10's `_ppo_update`/`train()`.
+  `returns`, `format_and_outcome_reward`, `retrieval_fraction`, plus `question` and `completion`
+  (the row's question text and the episode's message list) — consumed by Task 10's
+  `_ppo_update`/`train()`, where `question`/`completion` feed the per-step diagnostic log and the
+  periodic sample-completion log (added in response to a mid-plan request for detailed,
+  rerun-free diagnostics on long training runs — see this plan's amendment note above Task 9).
 
 Add the needed import at the top of the file: `from turn_level_rewards.rewards import format_reward, outcome_reward`
 (alongside the existing `TURN_REWARD_SCALE` import from Task 3 — combine into one import line).
@@ -1190,10 +1201,16 @@ Add to `src/turn_level_rewards/train_ppo.py`, inside `MTPPOTrainer`:
                     "returns": torch.tensor(returns, device=old_values.device),
                     "format_and_outcome_reward": format_and_outcome_reward,
                     "retrieval_fraction": retrieval_fraction,
+                    "question": row["question"],
+                    "completion": completion,
                 }
             )
         return episodes
 ```
+
+`question`/`completion` are not needed by GAE/PPO math -- they exist purely so `train()` (Task
+10) can write diagnostic logs (a per-step JSONL record and a periodic human-readable sample
+completion) without needing to re-derive them or re-run anything.
 
 - [ ] **Step 2: No automated test for this step** (real model required).
 
@@ -1221,9 +1238,14 @@ git commit -m "train_ppo: add MTPPOTrainer._collect_batch"
 - Produces: `MTPPOTrainer._ppo_update(self, episodes: list[dict]) -> dict[str, float]` (mean
   loss/policy_loss/value_loss/kl across the inner epoch), `MTPPOTrainer.train(self) -> None`
   (overrides `Trainer.train()` entirely with the outer rollout-collection loop) — the last piece
-  needed for `build_ppo_trainer` (Task 11) to produce a runnable trainer.
+  needed for `build_ppo_trainer` (Task 11) to produce a runnable trainer. `train()` also writes
+  two diagnostic artifacts under `self.args.output_dir` — `train_log.jsonl` (one structured JSON
+  line per step) and `sample_completions.log` (periodic human-readable transcripts) — plus a
+  stdout progress line per step, per this plan's mid-execution amendment (see the note above
+  Task 9).
 
-Add `import trackio` and `import itertools` at the top of the file.
+Add these imports at the top of the file: `import itertools`, `import json`, `import time`,
+`from pathlib import Path`, `import trackio`, `from transformers.trainer_utils import set_seed`.
 
 - [ ] **Step 1: Write the implementation**
 
@@ -1264,18 +1286,59 @@ Add to `src/turn_level_rewards/train_ppo.py`, inside `MTPPOTrainer`:
                 num_updates += 1
             self.optimizer.step()
         return {key: value / num_updates for key, value in totals.items()}
+```
 
+Add this constant near the top of the file, alongside `MODEL_NAME` (module level, not inside the
+class):
+
+```python
+_SAMPLE_COMPLETION_INTERVAL = 10
+```
+
+Every 10th step, plus always step 0 (so even a 2-step smoke test produces at least one sample),
+`train()` appends one full episode transcript to `sample_completions.log`. Frequent enough to
+catch a policy that's degenerated mid-run without waiting for the run to finish; infrequent
+enough not to flood the file on a long run.
+
+```python
     def train(self) -> None:
         """Overrides Trainer.train() entirely: PPO's collect-then-multi-epoch-update structure
         doesn't fit Trainer's default single-pass-per-batch loop, so this owns the whole outer
         loop instead of relying on get_train_dataloader()/training_step().
+
+        Writes two diagnostic artifacts under self.args.output_dir, so a run can be inspected
+        after the fact without rerunning it:
+          - train_log.jsonl: one JSON line per step with every metric plus a per-episode
+            breakdown (question, reward, retrieval_fraction, action-token count) -- enough detail
+            to diagnose a specific step or a specific episode's reward after training has already
+            finished, not just an aggregate curve.
+          - sample_completions.log: one full example transcript appended every
+            _SAMPLE_COMPLETION_INTERVAL steps (plain text), mirroring this repo's existing
+            train.py convention of log_completions=True for GRPO -- lets a human spot-check real
+            model output during a long run without re-running anything.
+        Also prints a one-line progress summary to stdout each step (step/max_steps, key metrics,
+        elapsed and estimated-remaining wall-clock) so a long run's progress is visible without
+        having trackio's dashboard open.
+
+        set_seed(self.args.seed) is called here explicitly because this override replaces
+        Trainer.train() entirely -- the base class's own seeding call never runs, so without this,
+        two runs with the same --seed would silently stop reproducing the same rollouts (sampling
+        in _rollout_episode uses torch's global RNG).
         """
+        set_seed(self.args.seed)
         self.optimizer = self.create_optimizer()
         rows = list(self.train_dataset)
         row_cycle = itertools.cycle(rows)
         trackio.init(project=self.args.project, name=self.args.run_name)
 
+        output_dir = Path(self.args.output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        log_path = output_dir / "train_log.jsonl"
+        sample_completions_path = output_dir / "sample_completions.log"
+
+        run_start = time.monotonic()
         for step in range(self.args.max_steps):
+            step_start = time.monotonic()
             batch_rows = [next(row_cycle) for _ in range(self.args.num_rollouts_per_step)]
             episodes = self._collect_batch(batch_rows)
             update_metrics = self._ppo_update(episodes)
@@ -1284,17 +1347,57 @@ Add to `src/turn_level_rewards/train_ppo.py`, inside `MTPPOTrainer`:
             mean_retrieval_fraction = sum(e["retrieval_fraction"] for e in episodes) / len(
                 episodes
             )
-            trackio.log(
+            total_elapsed = time.monotonic() - run_start
+            steps_remaining = self.args.max_steps - (step + 1)
+            eta_seconds = (total_elapsed / (step + 1)) * steps_remaining
+
+            metrics = {
+                "step": step,
+                "loss": update_metrics["loss"],
+                "policy_loss": update_metrics["policy_loss"],
+                "value_loss": update_metrics["value_loss"],
+                "kl": update_metrics["kl"],
+                "reward": mean_reward,
+                "retrieval_fraction": mean_retrieval_fraction,
+            }
+            trackio.log(metrics)
+
+            log_record = dict(metrics)
+            log_record["step_elapsed_seconds"] = time.monotonic() - step_start
+            log_record["total_elapsed_seconds"] = total_elapsed
+            log_record["eta_seconds"] = eta_seconds
+            log_record["episodes"] = [
                 {
-                    "step": step,
-                    "loss": update_metrics["loss"],
-                    "policy_loss": update_metrics["policy_loss"],
-                    "value_loss": update_metrics["value_loss"],
-                    "kl": update_metrics["kl"],
-                    "reward": mean_reward,
-                    "retrieval_fraction": mean_retrieval_fraction,
+                    "question": episode["question"],
+                    "format_and_outcome_reward": episode["format_and_outcome_reward"],
+                    "retrieval_fraction": episode["retrieval_fraction"],
+                    "num_action_tokens": len(episode["old_values"]),
                 }
+                for episode in episodes
+            ]
+            with log_path.open("a") as log_file:
+                log_file.write(json.dumps(log_record) + "\n")
+
+            if step == 0 or (step + 1) % _SAMPLE_COMPLETION_INTERVAL == 0:
+                sample_episode = episodes[0]
+                with sample_completions_path.open("a") as sample_file:
+                    sample_file.write(
+                        f"=== step {step + 1} | reward="
+                        f"{sample_episode['format_and_outcome_reward']:.3f} | retrieval_fraction="
+                        f"{sample_episode['retrieval_fraction']:.3f} ===\n"
+                    )
+                    sample_file.write(f"question: {sample_episode['question']}\n")
+                    for message in sample_episode["completion"]:
+                        sample_file.write(f"[{message.get('role')}] {message.get('content')}\n")
+                    sample_file.write("\n")
+
+            print(
+                f"step {step + 1}/{self.args.max_steps} | loss={metrics['loss']:.4f} "
+                f"reward={mean_reward:.3f} retrieval_fraction={mean_retrieval_fraction:.3f} "
+                f"| elapsed={total_elapsed:.0f}s eta={eta_seconds:.0f}s",
+                flush=True,
             )
+
             self.state.global_step = step + 1
 
             if (step + 1) % self.args.save_steps == 0 if self.args.save_steps else False:
@@ -1314,7 +1417,7 @@ Expected: PASS (17 tests total)
 
 ```bash
 git add src/turn_level_rewards/train_ppo.py
-git commit -m "train_ppo: add MTPPOTrainer._ppo_update and train() override"
+git commit -m "train_ppo: add MTPPOTrainer._ppo_update and train() override with diagnostic logging"
 ```
 
 ---
@@ -1621,6 +1724,17 @@ Expected: completes without error. Manually inspect the run for:
 - `place_turn_rewards`'s `R^I` term is confirmed **always 0** for this condition (add a temporary
   print of `per_token_rewards` inside `_collect_batch` during this manual run if needed to verify
   directly, then remove it — don't leave debug prints committed).
+- Whether a turn ever produces more than one `tool_call` in the same assistant message. If it
+  does, check whether `trl`'s `parse_response`/chat template needs a `tool_call_id` on the
+  corresponding tool message to associate the response with the right call (this repo's tool
+  messages currently carry only `role`/`name`/`content`, no `tool_call_id` — flagged as an open
+  question by Task 7's review, not yet resolved). Record the answer in the Handoff notes either
+  way.
+- What happens when `n_max` is exhausted while every turn made a tool call (the episode never
+  reaches a final-answer turn). Confirm `_collect_batch`'s reward computation
+  (`format_reward`/`outcome_reward` on an answerless `completion`) behaves sensibly (a low/negative
+  reward, not a crash) rather than assuming it — this edge case was flagged by Task 7's review as
+  inherited from the algorithm, not yet observed in a real run.
 
 - [ ] **Step 2: Run the `mt_ppo` condition smoke test**
 
@@ -1630,20 +1744,42 @@ Expected: same as Step 1, plus: confirm `R^I` is **nonzero** on at least one epi
 supporting-fact title was actually surfaced (cross-check against
 `rollout["retrieval_fraction_after_each_turn"]` for that episode).
 
-- [ ] **Step 3: Record results in the Handoff notes**
+- [ ] **Step 3: Verify the diagnostic logging artifacts from both runs**
+
+For each of the two runs above, confirm:
+- `outputs/{condition}/train_log.jsonl` exists and has exactly 2 lines (one per step), each valid
+  JSON with the fields `step`, `loss`, `policy_loss`, `value_loss`, `kl`, `reward`,
+  `retrieval_fraction`, `step_elapsed_seconds`, `total_elapsed_seconds`, `eta_seconds`, and an
+  `episodes` list with `question`/`format_and_outcome_reward`/`retrieval_fraction`/
+  `num_action_tokens` per episode.
+- `outputs/{condition}/sample_completions.log` exists and contains at least one real transcript
+  (step 0's, since `_SAMPLE_COMPLETION_INTERVAL=10` alone wouldn't trigger within only 2 steps) —
+  confirm the question/message text is real model output, not empty or placeholder text.
+- The stdout progress line (`step N/max_steps | loss=... reward=... retrieval_fraction=...
+  elapsed=...s eta=...s`) printed once per step during the run.
+- Re-run the `ppo` condition a second time with the same `--seed` (default 42) and confirm
+  `train_log.jsonl`'s `reward`/`retrieval_fraction` values match the first run's step 0 (validates
+  `set_seed` actually makes the run repeatable, not just that the file exists) — note any
+  divergence in the Handoff notes rather than assuming determinism holds if it doesn't (real GPU
+  kernels can have residual nondeterminism `set_seed` alone doesn't eliminate; record what's
+  actually observed).
+
+- [ ] **Step 4: Record results in the Handoff notes**
 
 Update `docs/phase-7-mt-ppo.md`'s Handoff notes section (currently `(not yet started)`) with: any
 TRL/transformers API surprises found, the real observed per-step wall-clock time, confirmation of
-the four exit criteria in that doc, and anything relevant for Phase 7b (full runs) or Phase 8 (LLM
-judge) to pick up. This is the same handoff discipline every prior phase followed.
+the four exit criteria in that doc, the tool_call_id and answerless-completion findings from Step
+1, the repeatability result from Step 3's same-seed re-run, and anything relevant for Phase 7b
+(full runs) or Phase 8 (LLM judge) to pick up. This is the same handoff discipline every prior
+phase followed.
 
-- [ ] **Step 4: Update CLAUDE.md's roadmap table**
+- [ ] **Step 5: Update CLAUDE.md's roadmap table**
 
 Change Phase 7's Status cell from "Not started" to "**Done**", following the exact style of the
 other completed rows (a bolded "Done", then a semicolon-separated summary of what was verified and
 a pointer to the Handoff notes for detail).
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
 git add docs/phase-7-mt-ppo.md CLAUDE.md
@@ -1675,3 +1811,10 @@ call site (Task 9, Task 10). `MTPPOConfig` field names (`n_max`, `clip_eps`, `kl
 **Scope check:** This plan covers Phase 7 exactly as scoped (build + smoke test) — no full
 training runs, no evaluation, no matplotlib visuals (those are Phase 7b, already stubbed in
 `docs/phase-7b-full-ppo-runs.md`).
+
+**Mid-execution amendment:** after Task 7 landed, a request arrived for detailed diagnostic
+logging, deterministic repeatability, and long-run progress visibility. Tasks 9/10/13 were
+revised in place (before being dispatched) to add `question`/`completion` to `_collect_batch`'s
+episode dict, `set_seed`/`train_log.jsonl`/`sample_completions.log`/stdout progress to `train()`,
+and a verification step in the live smoke test confirming both log artifacts are populated with
+real content and that same-seed reruns actually reproduce.
