@@ -98,10 +98,103 @@ def turn_reward(
     return rewards
 
 
-def get_reward_funcs(condition: Literal["outcome_only", "turn_level"]) -> list[Any]:
-    """Return the reward function list for a training condition (CLAUDE.md's Reward design)."""
+_LENGTH_PENALTY_CAP = 0.2
+_LENGTH_PENALTY_TARGET_CHARS = 2000
+
+
+def _generated_length(completion: Completion) -> int:
+    """Total character length of the model's own generated text (assistant messages only).
+
+    Excludes tool-response content deliberately -- that text is injected by the environment
+    (retrieved documents), not written by the model, so it shouldn't count against it.
+    """
+    return sum(
+        len(str(message.get("content") or ""))
+        for message in completion
+        if message.get("role") == "assistant"
+    )
+
+
+def length_penalty(
+    completions: list[Completion], log_metric: LogMetric = _noop_log_metric, **kwargs: Any
+) -> list[float]:
+    """Small penalty for generated text beyond a target length.
+
+    Added to counter a real, measured drift: Phase 6's symmetric re-run showed completion length
+    roughly doubling over training in both conditions, decoupled from correctness (same-length
+    rollout groups scored anywhere from 0 to max reward) -- see
+    docs/phase-6-evaluation-comparison.md's Handoff notes. Nothing in format_reward/outcome_reward
+    penalizes verbosity, so the drift is free under the existing reward; this adds the missing
+    pressure. No penalty below _LENGTH_PENALTY_TARGET_CHARS (matching the healthy early-training
+    baseline observed in that same run); scales linearly above it, capped at
+    -_LENGTH_PENALTY_CAP so it can never dominate outcome_reward (max 1.5) or turn_reward (max 0.4).
+    """
+    rewards = []
+    for completion in completions:
+        length = _generated_length(completion)
+        excess = max(0, length - _LENGTH_PENALTY_TARGET_CHARS)
+        penalty = -_LENGTH_PENALTY_CAP * min(1.0, excess / _LENGTH_PENALTY_TARGET_CHARS)
+        rewards.append(penalty)
+        log_metric("completion_length", float(length))
+    return rewards
+
+
+_SEARCH_COUNT_PENALTY_COEF = 0.1
+
+
+def _search_call_count(completion: Completion) -> int:
+    """Number of `search` tool calls issued across the completion's assistant turns."""
+    count = 0
+    for message in completion:
+        if message.get("role") != "assistant":
+            continue
+        for tool_call in message.get("tool_calls") or []:
+            if tool_call.get("function", {}).get("name") == "search":
+                count += 1
+    return count
+
+
+def search_count_penalty(
+    completions: list[Completion], log_metric: LogMetric = _noop_log_metric, **kwargs: Any
+) -> list[float]:
+    """-0.1 * n_search -- the source paper's MT-PPO search-count penalty (Section 5.2/6.1,
+    lambda_s=0.1 "by default"), borrowed here for GRPO.
+
+    Confirmed by direct fetch: the paper's own GRPO-OR/GRPO-MR case study (Appendix E) has no
+    search-count penalty at all -- this term only exists in their PPO/MT-PPO reward design. So
+    this is NOT a paper reproduction of the GRPO methodology; it's a deliberate experiment
+    borrowing their PPO-context mechanism and coefficient as the best available grounded
+    starting point, paired with dropping the prompt's "at most 2 searches" instruction (see
+    data.py's search_cap_in_prompt) -- the reward now does the job the prompt used to do. See
+    docs/phase-6-evaluation-comparison.md's Handoff notes for the full reasoning.
+    """
+    rewards = []
+    for completion in completions:
+        n_search = _search_call_count(completion)
+        rewards.append(-_SEARCH_COUNT_PENALTY_COEF * n_search)
+        log_metric("search_call_count", float(n_search))
+    return rewards
+
+
+def get_reward_funcs(
+    condition: Literal["outcome_only", "turn_level"],
+    penalize_length: bool = False,
+    penalize_search_count: bool = False,
+) -> list[Any]:
+    """Return the reward function list for a training condition (CLAUDE.md's Reward design).
+
+    penalize_length and penalize_search_count are orthogonal toggles (not new condition values)
+    so either composes with either condition without duplicating the outcome_only/turn_level
+    branch -- see docs/phase-6-evaluation-comparison.md's Handoff notes for why each was added.
+    """
     if condition == "outcome_only":
-        return [format_reward, outcome_reward]
-    if condition == "turn_level":
-        return [format_reward, outcome_reward, turn_reward]
-    raise ValueError(f"Unknown condition: {condition!r}")
+        funcs = [format_reward, outcome_reward]
+    elif condition == "turn_level":
+        funcs = [format_reward, outcome_reward, turn_reward]
+    else:
+        raise ValueError(f"Unknown condition: {condition!r}")
+    if penalize_length:
+        funcs.append(length_penalty)
+    if penalize_search_count:
+        funcs.append(search_count_penalty)
+    return funcs

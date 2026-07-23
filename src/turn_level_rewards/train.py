@@ -200,6 +200,9 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--eval-size", type=int, default=8)
     parser.add_argument("--max-steps", type=int, default=2)
     parser.add_argument("--num-generations", type=int, default=2)
+    parser.add_argument("--penalize-length", action="store_true")
+    parser.add_argument("--paper-search-penalty", action="store_true")
+    parser.add_argument("--remove-search-cap-prompt", action="store_true")
     return parser.parse_args(argv)
 
 
@@ -208,17 +211,43 @@ def build_trainer(
     train_size: int | None,
     eval_size: int | None,
     config: GRPOConfig,
+    penalize_length: bool = False,
+    paper_search_penalty: bool = False,
+    remove_search_cap_prompt: bool = False,
 ) -> GRPOTrainer:
     """Composition root: real model, real SearchEnv (hits the live retrieval server), real data.
 
+    paper_search_penalty drops the prompt's "at most 2 searches" instruction (data.py's
+    search_cap_in_prompt=False) and adds rewards.py's search_count_penalty in its place -- see
+    that function's docstring for why this is a deliberate experiment, not a paper reproduction
+    of the GRPO methodology specifically (the paper's GRPO case study has no such term; this
+    borrows their PPO-context mechanism).
+
+    remove_search_cap_prompt is the decoupled control condition: drops the same prompt
+    instruction WITHOUT adding search_count_penalty. Added after search_count_penalty collapsed
+    both conditions' training, to isolate whether the collapse was caused by removing the prompt
+    guidance or by the penalty term itself -- the two were previously only testable bundled
+    together via paper_search_penalty. Passing both flags together is redundant but harmless
+    (the prompt is dropped either way); penalize_search_count only turns on when
+    paper_search_penalty is set, never from this flag alone.
+
     Not unit-tested -- this is exactly the integration surface the live smoke test validates.
     """
+    search_cap_in_prompt = not (paper_search_penalty or remove_search_cap_prompt)
     return GRPOTrainer(
         model="Qwen/Qwen3.5-0.8B",
-        reward_funcs=get_reward_funcs(condition),
+        reward_funcs=get_reward_funcs(
+            condition,
+            penalize_length=penalize_length,
+            penalize_search_count=paper_search_penalty,
+        ),
         args=config,
-        train_dataset=data.load_train_dataset(n=train_size, seed=config.seed),
-        eval_dataset=data.load_eval_dataset(n=eval_size, seed=config.seed),
+        train_dataset=data.load_train_dataset(
+            n=train_size, seed=config.seed, search_cap_in_prompt=search_cap_in_prompt
+        ),
+        eval_dataset=data.load_eval_dataset(
+            n=eval_size, seed=config.seed, search_cap_in_prompt=search_cap_in_prompt
+        ),
         # SearchEnv.reset requires `metadata`, which is stricter than TRL's `_SupportsReset`
         # protocol (bare **kwargs). This is safe in practice: per CLAUDE.md's "TRL mechanics"
         # section, TRL always calls reset() with the entire sampled dataset row as kwargs, and
@@ -242,10 +271,22 @@ def main() -> None:
     # same --condition silently share one trackio run record: a real full run at num_generations=21
     # found its own reward/exact_match/f1 curve interleaved with every earlier debug invocation's
     # data under the same run name, with no way to cleanly separate them after the fact.
+    length_suffix = "-lengthpenalized" if args.penalize_length else ""
+    search_suffix = "-searchpenalized" if args.paper_search_penalty else ""
+    nocap_suffix = "-nosearchcapprompt" if args.remove_search_cap_prompt else ""
     config.run_name = (
-        f"{args.condition}-{args.max_steps}steps-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+        f"{args.condition}-{args.max_steps}steps{length_suffix}{search_suffix}{nocap_suffix}-"
+        f"{datetime.now().strftime('%Y%m%d-%H%M%S')}"
     )
-    trainer = build_trainer(args.condition, args.train_size, args.eval_size, config)
+    trainer = build_trainer(
+        args.condition,
+        args.train_size,
+        args.eval_size,
+        config,
+        args.penalize_length,
+        args.paper_search_penalty,
+        args.remove_search_cap_prompt,
+    )
     trainer.train()
 
 

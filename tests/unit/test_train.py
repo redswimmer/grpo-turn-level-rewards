@@ -213,6 +213,7 @@ def test_parse_args_defaults():
     assert args.eval_size == 8
     assert args.max_steps == 2
     assert args.num_generations == 2
+    assert args.penalize_length is False
 
 
 def test_parse_args_condition_required():
@@ -249,3 +250,33 @@ def test_parse_args_overrides():
     assert args.eval_size == 200
     assert args.max_steps == 500
     assert args.num_generations == 8
+
+
+def test_parse_args_penalize_length_flag():
+    args = _parse_args(["--condition", "outcome_only", "--penalize-length"])
+
+    assert args.penalize_length is True
+
+
+def test_parse_args_paper_search_penalty_flag():
+    args = _parse_args(["--condition", "outcome_only", "--paper-search-penalty"])
+
+    assert args.paper_search_penalty is True
+
+
+def test_parse_args_paper_search_penalty_defaults_to_false():
+    args = _parse_args(["--condition", "outcome_only"])
+
+    assert args.paper_search_penalty is False
+
+
+def test_parse_args_remove_search_cap_prompt_flag():
+    args = _parse_args(["--condition", "outcome_only", "--remove-search-cap-prompt"])
+
+    assert args.remove_search_cap_prompt is True
+
+
+def test_parse_args_remove_search_cap_prompt_defaults_to_false():
+    args = _parse_args(["--condition", "outcome_only"])
+
+    assert args.remove_search_cap_prompt is False
