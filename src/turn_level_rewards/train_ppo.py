@@ -8,6 +8,7 @@ unmodified. See CLAUDE.md's Goal section and docs/phase-7-mt-ppo.md for the full
 """
 
 import argparse
+import inspect
 import itertools
 import json
 import time
@@ -387,23 +388,68 @@ class MTPPOTrainer(Trainer):
                 break  # final answer turn -- episode complete
 
             for tool_call in tool_calls:
+                # A real failure Task 13's live smoke test caught: an untrained (or
+                # early-training) policy can hallucinate a tool call that doesn't match
+                # search()'s real signature -- an unexpected/extra/missing argument name
+                # (observed directly: "search() got an unexpected keyword argument 'return'"),
+                # or a malformed tool_call dict missing "function"/"arguments" entirely. This
+                # must not crash the whole training run: it's exactly the kind of
+                # self-correctable mistake this episode's own format_reward/outcome_reward
+                # should teach the policy out of over time, not a fatal error.
+                #
+                # This is split into three steps -- extract args, validate the binding, then call
+                # -- specifically so that a genuine retrieval-server/infra failure raised from
+                # *inside* search()'s own body (e.g. SearchEnv.search()'s `doc["title"]` access
+                # raising KeyError on a malformed document from the retrieval server) is never
+                # caught here and mislabeled as a model mistake. An earlier version wrapped the
+                # entire `environment.search(**tool_call["function"]["arguments"])` call in one
+                # try/except(TypeError, KeyError) -- that accidentally also caught KeyErrors
+                # raised from inside search()'s body, silently absorbing real infra bugs as if
+                # they were hallucinated tool calls. Splitting the extraction, the signature
+                # validation, and the actual (uncaught) call into three separate steps closes
+                # that gap.
+
+                # Step 1: pull the arguments out of the tool_call dict. A KeyError/TypeError here
+                # means the dict itself is malformed (missing "function"/"arguments", or
+                # "arguments" isn't a mapping) -- always a model-output problem, never
+                # search()'s fault, since search() hasn't been touched yet.
                 try:
-                    result = environment.search(**tool_call["function"]["arguments"])
+                    call_args = tool_call["function"]["arguments"]
                 except (TypeError, KeyError) as exc:
-                    # A real failure Task 13's live smoke test caught: an untrained (or
-                    # early-training) policy can hallucinate a tool call that doesn't match
-                    # search()'s real signature -- an unexpected/extra/missing argument name
-                    # (observed directly: "search() got an unexpected keyword argument
-                    # 'return'"), or a malformed tool_call dict missing "function"/"arguments"
-                    # entirely. This must not crash the whole training run: it's exactly the
-                    # kind of self-correctable mistake this episode's own
-                    # format_reward/outcome_reward should teach the policy out of over time, not
-                    # a fatal error. Deliberately scoped to TypeError/KeyError only -- a genuine
-                    # retrieval-server/infra failure (e.g. a connection error inside
-                    # environment.search itself) is NOT caught here and should still surface as a
-                    # real crash needing attention, not be silently absorbed as if it were a model
-                    # mistake.
-                    result = f"Error: invalid arguments for search(): {exc}"
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "name": "search",
+                            "content": f"Error: invalid arguments for search(): {exc}",
+                        }
+                    )
+                    continue
+
+                # Step 2: check the extracted arguments would bind against search()'s real
+                # signature WITHOUT calling it -- inspect.signature(...).bind() only performs
+                # Python's argument-binding logic (matching names/arity), it never executes
+                # search()'s body. A TypeError here (e.g. an unexpected keyword argument) is
+                # therefore guaranteed to be a real argument-mismatch caused by the model, not
+                # something that happened inside search().
+                try:
+                    inspect.signature(environment.search).bind(**call_args)
+                except TypeError as exc:
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "name": "search",
+                            "content": f"Error: invalid arguments for search(): {exc}",
+                        }
+                    )
+                    continue
+
+                # Step 3: only now actually call search(), deliberately OUTSIDE any try/except.
+                # Both preceding checks already ruled out a malformed tool_call and an
+                # argument-mismatch, so any exception raised here comes from genuinely inside
+                # search()'s own body (e.g. a KeyError from a malformed retrieval-server
+                # document) -- a real infra failure that must propagate as a visible crash, not
+                # be silently absorbed as if it were a model mistake.
+                result = environment.search(**call_args)
                 messages.append({"role": "tool", "name": "search", "content": result})
 
             turn_boundary_action_indices.append(num_action_tokens - 1)
