@@ -7,11 +7,16 @@ docs/superpowers/specs/2026-07-05-phase-7-mt-ppo-design.md). Reuses SearchEnv/re
 unmodified. See CLAUDE.md's Goal section and docs/phase-7-mt-ppo.md for the full design.
 """
 
+import itertools
+import json
+import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Literal
 
 import torch
 import torch.nn as nn
+import trackio
 from transformers import (
     AutoModelForCausalLM,
     AutoModelForSequenceClassification,
@@ -19,6 +24,7 @@ from transformers import (
     Trainer,
     TrainingArguments,
 )
+from transformers.trainer_utils import set_seed
 from trl.chat_template_utils import add_response_schema, get_training_chat_template, parse_response
 
 from turn_level_rewards.env import SearchEnv
@@ -27,6 +33,8 @@ from turn_level_rewards.rewards import TURN_REWARD_SCALE, format_reward, outcome
 Condition = Literal["ppo", "mt_ppo"]
 
 MODEL_NAME = "Qwen/Qwen3.5-0.8B"
+
+_SAMPLE_COMPLETION_INTERVAL = 10
 
 
 @dataclass
@@ -484,3 +492,178 @@ class MTPPOTrainer(Trainer):
                 }
             )
         return episodes
+
+    def _ppo_update(self, episodes: list[dict]) -> dict[str, float]:
+        """Run args.num_ppo_epochs inner passes over the collected batch, gradient-accumulated
+        across all episodes in the batch, one optimizer step per inner epoch. Matches this
+        repo's existing train.py precedent of per-episode (batch-of-1) forward/backward passes
+        with gradient accumulation, avoiding any padding/attention-mask complexity -- consistent
+        with the single-RTX-4090, 0.8B-model memory profile the rest of this repo already
+        established.
+        """
+        totals = {"loss": 0.0, "policy_loss": 0.0, "value_loss": 0.0, "kl": 0.0}
+        num_updates = 0
+        # self.args.num_ppo_epochs is a real field on this file's MTPPOConfig, but Trainer's
+        # base type stub only knows self.args as the looser `TrainingArguments` -- same
+        # ty-can't-see-through-Trainer's-base-types root cause already noted throughout this
+        # class (see create_optimizer, _rollout_episode, _collect_batch above).
+        for _epoch in range(self.args.num_ppo_epochs):  # ty: ignore[unresolved-attribute]
+            # self.optimizer is declared Optional (`Optimizer | None | Unknown`) on Trainer's
+            # base class, since Trainer only populates it once create_optimizer() has actually
+            # been called -- but train() always assigns a real optimizer
+            # (self.optimizer = self.create_optimizer()) before ever invoking _ppo_update, so it
+            # is provably non-None here at runtime.
+            self.optimizer.zero_grad()  # ty: ignore[unresolved-attribute]
+            for episode in episodes:
+                new_logprobs, new_values = self._forward_logprobs_and_values(
+                    episode["full_token_ids"], episode["action_mask"]
+                )
+                action_mask = torch.ones_like(new_logprobs)
+                loss_dict = compute_ppo_loss(
+                    new_logprobs=new_logprobs,
+                    old_logprobs=episode["old_logprobs"],
+                    advantages=episode["advantages"],
+                    returns=episode["returns"],
+                    new_values=new_values,
+                    action_mask=action_mask,
+                    # self.args.clip_eps, self.args.kl_beta, and self.args.value_loss_coef are
+                    # real fields on this file's MTPPOConfig -- same ty-can't-see-through-
+                    # Trainer's-base-types root cause as self.args.num_ppo_epochs above; these
+                    # three are genuinely back-to-back kwargs sharing that identical cause.
+                    clip_eps=self.args.clip_eps,  # ty: ignore[unresolved-attribute]
+                    kl_beta=self.args.kl_beta,  # ty: ignore[unresolved-attribute]
+                    value_loss_coef=self.args.value_loss_coef,  # ty: ignore[unresolved-attribute]
+                )
+                (loss_dict["loss"] / len(episodes)).backward()
+                for key in totals:
+                    totals[key] += loss_dict[key].item()
+                num_updates += 1
+            # self.optimizer is Optional on Trainer's base class for the same reason noted
+            # above this method's self.optimizer.zero_grad() call; still provably a real
+            # Optimizer at this point in the loop.
+            self.optimizer.step()  # ty: ignore[unresolved-attribute]
+        return {key: value / num_updates for key, value in totals.items()}
+
+    # train(self) intentionally narrows Trainer.train's full signature
+    # (resume_from_checkpoint, trial, ignore_keys_for_eval -> TrainOutput) down to train(self)
+    # -> None: PPO's collect-then-multi-epoch-update outer loop replaces Trainer's generic
+    # dataloader/training_step machinery those parameters exist to support (see this method's
+    # own docstring), and no call site in this repo (build_ppo_trainer, the live smoke test)
+    # ever needs to pass them.
+    def train(self) -> None:  # ty: ignore[invalid-method-override]
+        """Overrides Trainer.train() entirely: PPO's collect-then-multi-epoch-update structure
+        doesn't fit Trainer's default single-pass-per-batch loop, so this owns the whole outer
+        loop instead of relying on get_train_dataloader()/training_step().
+
+        Writes two diagnostic artifacts under self.args.output_dir, so a run can be inspected
+        after the fact without rerunning it:
+          - train_log.jsonl: one JSON line per step with every metric plus a per-episode
+            breakdown (question, reward, retrieval_fraction, action-token count) -- enough detail
+            to diagnose a specific step or a specific episode's reward after training has already
+            finished, not just an aggregate curve.
+          - sample_completions.log: one full example transcript appended every
+            _SAMPLE_COMPLETION_INTERVAL steps (plain text), mirroring this repo's existing
+            train.py convention of log_completions=True for GRPO -- lets a human spot-check real
+            model output during a long run without re-running anything.
+        Also prints a one-line progress summary to stdout each step (step/max_steps, key metrics,
+        elapsed and estimated-remaining wall-clock) so a long run's progress is visible without
+        having trackio's dashboard open.
+
+        set_seed(self.args.seed) is called here explicitly because this override replaces
+        Trainer.train() entirely -- the base class's own seeding call never runs, so without this,
+        two runs with the same --seed would silently stop reproducing the same rollouts (sampling
+        in _rollout_episode uses torch's global RNG).
+        """
+        set_seed(self.args.seed)
+        self.optimizer = self.create_optimizer()
+        # self.train_dataset is typed by Trainer's base class as
+        # `torch.utils.data.Dataset | datasets.arrow_dataset.Dataset | None`, and
+        # torch.utils.data.Dataset's stub doesn't declare __iter__, so ty can't confirm it's
+        # Iterable -- but build_ppo_trainer (Task 11) always constructs this trainer with a real
+        # datasets.Dataset, which genuinely is iterable at runtime.
+        rows = list(self.train_dataset)  # ty: ignore[invalid-argument-type]
+        row_cycle = itertools.cycle(rows)
+        trackio.init(project=self.args.project, name=self.args.run_name)
+
+        # self.args.output_dir is typed `str | None` on TrainingArguments (None only if a
+        # caller explicitly passed output_dir=None), but build_ppo_config always sets a real
+        # output_dir string, so this is never actually None at runtime.
+        output_dir = Path(self.args.output_dir)  # ty: ignore[invalid-argument-type]
+        output_dir.mkdir(parents=True, exist_ok=True)
+        log_path = output_dir / "train_log.jsonl"
+        sample_completions_path = output_dir / "sample_completions.log"
+
+        run_start = time.monotonic()
+        for step in range(self.args.max_steps):
+            step_start = time.monotonic()
+            # self.args.num_rollouts_per_step is a real field on this file's MTPPOConfig, but
+            # Trainer's base type stub only knows self.args as the looser `TrainingArguments` --
+            # same ty-can't-see-through-Trainer's-base-types root cause already noted throughout
+            # this class (see create_optimizer, _rollout_episode, _collect_batch, _ppo_update
+            # above).
+            batch_rows = [
+                next(row_cycle)
+                for _ in range(self.args.num_rollouts_per_step)  # ty: ignore[unresolved-attribute]
+            ]
+            episodes = self._collect_batch(batch_rows)
+            update_metrics = self._ppo_update(episodes)
+
+            mean_reward = sum(e["format_and_outcome_reward"] for e in episodes) / len(episodes)
+            mean_retrieval_fraction = sum(e["retrieval_fraction"] for e in episodes) / len(episodes)
+            total_elapsed = time.monotonic() - run_start
+            steps_remaining = self.args.max_steps - (step + 1)
+            eta_seconds = (total_elapsed / (step + 1)) * steps_remaining
+
+            metrics = {
+                "step": step,
+                "loss": update_metrics["loss"],
+                "policy_loss": update_metrics["policy_loss"],
+                "value_loss": update_metrics["value_loss"],
+                "kl": update_metrics["kl"],
+                "reward": mean_reward,
+                "retrieval_fraction": mean_retrieval_fraction,
+            }
+            trackio.log(metrics)
+
+            log_record = dict(metrics)
+            log_record["step_elapsed_seconds"] = time.monotonic() - step_start
+            log_record["total_elapsed_seconds"] = total_elapsed
+            log_record["eta_seconds"] = eta_seconds
+            log_record["episodes"] = [
+                {
+                    "question": episode["question"],
+                    "format_and_outcome_reward": episode["format_and_outcome_reward"],
+                    "retrieval_fraction": episode["retrieval_fraction"],
+                    "num_action_tokens": len(episode["old_values"]),
+                }
+                for episode in episodes
+            ]
+            with log_path.open("a") as log_file:
+                log_file.write(json.dumps(log_record) + "\n")
+
+            if step == 0 or (step + 1) % _SAMPLE_COMPLETION_INTERVAL == 0:
+                sample_episode = episodes[0]
+                with sample_completions_path.open("a") as sample_file:
+                    sample_file.write(
+                        f"=== step {step + 1} | reward="
+                        f"{sample_episode['format_and_outcome_reward']:.3f} | retrieval_fraction="
+                        f"{sample_episode['retrieval_fraction']:.3f} ===\n"
+                    )
+                    sample_file.write(f"question: {sample_episode['question']}\n")
+                    for message in sample_episode["completion"]:
+                        sample_file.write(f"[{message.get('role')}] {message.get('content')}\n")
+                    sample_file.write("\n")
+
+            print(
+                f"step {step + 1}/{self.args.max_steps} | loss={metrics['loss']:.4f} "
+                f"reward={mean_reward:.3f} retrieval_fraction={mean_retrieval_fraction:.3f} "
+                f"| elapsed={total_elapsed:.0f}s eta={eta_seconds:.0f}s",
+                flush=True,
+            )
+
+            self.state.global_step = step + 1
+
+            if (step + 1) % self.args.save_steps == 0 if self.args.save_steps else False:
+                self.save_model(f"{self.args.output_dir}/checkpoint-{step + 1}")
+
+        self.save_model(f"{self.args.output_dir}/checkpoint-{self.args.max_steps}")
