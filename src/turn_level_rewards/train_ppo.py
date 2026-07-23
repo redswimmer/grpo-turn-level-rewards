@@ -250,8 +250,16 @@ class MTPPOTrainer(Trainer):
         self.tokenizer = add_response_schema(tokenizer)
         self.training_chat_template = get_training_chat_template(self.tokenizer)
 
+    # create_optimizer(self) intentionally omits the base transformers.Trainer.create_optimizer's
+    # optional `model` parameter. The internal Trainer code path that passes it positionally
+    # is only reached for FSDP-XLA, SageMaker MP-DP, or DataParallel; this repo's single-GPU
+    # setup (per CLAUDE.md's Hardware section) never triggers it, so the omission is safe.
     def create_optimizer(self) -> torch.optim.Optimizer:  # ty: ignore[invalid-method-override]
         """One AdamW, two param groups -- policy_lr / critic_lr per the paper's spec (10x apart)."""
+        # self.model.policy, self.model.critic, self.args.policy_lr, and self.args.critic_lr
+        # are all real attributes defined on this file's _PolicyAndCritic and MTPPOConfig
+        # classes respectively. They are safe; ty's inability to see through Trainer's looser
+        # base types is not a real issue here.
         self.optimizer = torch.optim.AdamW(
             [
                 {"params": self.model.policy.parameters(), "lr": self.args.policy_lr},  # ty: ignore[unresolved-attribute]
