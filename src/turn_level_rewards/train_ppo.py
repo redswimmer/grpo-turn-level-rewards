@@ -387,7 +387,23 @@ class MTPPOTrainer(Trainer):
                 break  # final answer turn -- episode complete
 
             for tool_call in tool_calls:
-                result = environment.search(**tool_call["function"]["arguments"])
+                try:
+                    result = environment.search(**tool_call["function"]["arguments"])
+                except (TypeError, KeyError) as exc:
+                    # A real failure Task 13's live smoke test caught: an untrained (or
+                    # early-training) policy can hallucinate a tool call that doesn't match
+                    # search()'s real signature -- an unexpected/extra/missing argument name
+                    # (observed directly: "search() got an unexpected keyword argument
+                    # 'return'"), or a malformed tool_call dict missing "function"/"arguments"
+                    # entirely. This must not crash the whole training run: it's exactly the
+                    # kind of self-correctable mistake this episode's own
+                    # format_reward/outcome_reward should teach the policy out of over time, not
+                    # a fatal error. Deliberately scoped to TypeError/KeyError only -- a genuine
+                    # retrieval-server/infra failure (e.g. a connection error inside
+                    # environment.search itself) is NOT caught here and should still surface as a
+                    # real crash needing attention, not be silently absorbed as if it were a model
+                    # mistake.
+                    result = f"Error: invalid arguments for search(): {exc}"
                 messages.append({"role": "tool", "name": "search", "content": result})
 
             turn_boundary_action_indices.append(num_action_tokens - 1)
@@ -403,51 +419,58 @@ class MTPPOTrainer(Trainer):
             "retrieval_fraction_after_each_turn": retrieval_fraction_after_each_turn,
         }
 
-    def _forward_logprobs_and_values(
-        self, full_token_ids: list[int], action_mask: list[int]
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Teacher-forced forward pass over one episode's full token sequence.
-
-        Returns (action_logprobs, action_values), both 1-D tensors of length sum(action_mask) --
-        one entry per action (policy-generated) token, in the same order as
-        _rollout_episode's turn_boundary_action_indices.
-
-        Called twice per episode per PPO update: once under torch.no_grad() right after rollout
-        (the frozen "old" reference for the clip ratio, GAE, and the KL term), and once per PPO
-        inner epoch WITH grad (the "new" values that get backpropagated).
-
-        Applies the policy's LM head only at the handful of positions whose log-prob is actually
-        needed (one per action token), instead of over the whole sequence -- a real bug the live
-        smoke test caught (see build_policy_and_critic's docstring for the full story). This
-        model's vocab is 248,320 tokens; a naive `policy(input_ids).logits` call computes and
-        keeps alive a `[seq_len, vocab]` tensor for EVERY position (prompt tokens and
-        environment-injected tool-response tokens included, which this repo's episodes have many
-        more of than actual action tokens) -- gradient checkpointing (see
-        build_policy_and_critic) only checkpoints the backbone's transformer layers, not this
-        vocab-sized lm_head/log_softmax step sitting outside it, so that tensor's memory was still
-        the dominant, unbounded-by-checkpointing cost. Confirmed directly: even after adding
-        checkpointing alone, a real run OOM'd (masked as the NVML error described in
-        docs/phase-7-mt-ppo.md's Handoff notes) on episodes with full_token_ids as short as 1560
-        tokens. Computing the backbone's hidden states once (cheap: `[seq_len, hidden_size=1024]`,
-        not `[seq_len, vocab]`) and applying `lm_head` only at `predict_positions` (one per action
-        token) reduces that tensor from O(seq_len * vocab) to O(num_action_tokens * vocab) --
-        num_action_tokens is a small fraction of seq_len in this repo's tool-calling episodes.
-        """
+    def _action_indices(self, full_token_ids: list[int], action_mask: list[int]) -> torch.Tensor:
+        """Shared helper: input_ids tensor + the action-token position indices, used by both
+        _forward_policy_logprobs and _forward_critic_values so they stay consistent."""
         # self.model.policy resolves through Trainer's loose base-class type (nn.Module | None),
         # so ty can't see .device as a real attribute -- same root cause as the
         # unresolved-attribute suppressions already used in create_optimizer and
         # _rollout_episode above. Safe: self.model.policy is provably a real PreTrainedModel
         # instance at runtime, always has a genuine .device.
         device = self.model.policy.device  # ty: ignore[unresolved-attribute]
-        # device's type is therefore unresolved/ambiguous to ty (see immediately above), so it
-        # can't confirm device is a valid torch.device-compatible value for the `device=` kwarg
-        # on either torch.tensor(...) call below -- the same unresolved-attribute-propagates-
-        # into-invalid-argument-type chain _rollout_episode's input_ids construction already
-        # explains for policy.device. Safe for the same reason: at runtime device is always a
-        # genuine torch.device.
-        input_ids = torch.tensor([full_token_ids], device=device)  # ty: ignore[invalid-argument-type]
+        # device's type is unresolved to ty for the same reason noted immediately above, so it
+        # can't confirm device is a valid torch.device-compatible value for this device= kwarg --
+        # same root cause as every other `device=device` call site in this class. Safe: device is
+        # always a genuine torch.device at runtime.
         mask = torch.tensor(action_mask, device=device, dtype=torch.bool)  # ty: ignore[invalid-argument-type]
-        action_indices = mask.nonzero(as_tuple=True)[0]
+        return mask.nonzero(as_tuple=True)[0]
+
+    def _forward_policy_logprobs(
+        self, full_token_ids: list[int], action_mask: list[int]
+    ) -> torch.Tensor:
+        """Policy-only teacher-forced forward pass -- returns action_logprobs, a 1-D tensor of
+        length sum(action_mask) (one entry per action/policy-generated token).
+
+        Split out from the critic's own forward (_forward_critic_values) -- a real fix for a real
+        bug the live smoke test caught. mt_ppo's PPO update OOM'd intermittently (roughly half the
+        time, at episodes as short as ~750 tokens) even after gradient_checkpointing_enable() and
+        this method's own selective-lm_head fix (see build_policy_and_critic's and this file's
+        git history for that story): the with-grad "new" pass computed BOTH policy's and critic's
+        full computational graphs before either backward() call, so both stayed alive
+        simultaneously -- roughly double the peak memory of computing+backpropagating each
+        model's own loss term sequentially instead. _ppo_update now calls this method, backward()s
+        through the policy+KL loss alone (freeing this graph), THEN calls _forward_critic_values
+        and backward()s through the value loss alone -- mathematically identical total gradients
+        (policy_loss+kl_beta*kl and value_loss_coef*value_loss are independent additive terms over
+        disjoint parameters in compute_ppo_loss's formula, so splitting the backward call changes
+        nothing about the resulting per-parameter gradients), just without ever holding both
+        graphs in memory at once.
+
+        Applies the policy's LM head only at the handful of positions whose log-prob is actually
+        needed (one per action token), instead of over the whole sequence -- the OOM-causing bug
+        this fixed first. This model's vocab is 248,320 tokens; a naive `policy(input_ids).logits`
+        call computes and keeps alive a `[seq_len, vocab]` tensor for EVERY position (prompt
+        tokens and environment-injected tool-response tokens included, which this repo's episodes
+        have many more of than actual action tokens) -- gradient checkpointing only checkpoints
+        the backbone's transformer layers, not this vocab-sized lm_head/log_softmax step sitting
+        outside it, so that tensor's memory was still the dominant, unbounded-by-checkpointing
+        cost. Computing the backbone's hidden states once (cheap: `[seq_len, hidden_size=1024]`,
+        not `[seq_len, vocab]`) and applying `lm_head` only at `predict_positions` (one per action
+        token) reduces that tensor from O(seq_len * vocab) to O(num_action_tokens * vocab).
+        """
+        device = self.model.policy.device  # ty: ignore[unresolved-attribute]
+        input_ids = torch.tensor([full_token_ids], device=device)  # ty: ignore[invalid-argument-type]
+        action_indices = self._action_indices(full_token_ids, action_mask)
         # An action token at absolute position t was predicted by the model's output at position
         # t-1 (standard next-token-prediction shift).
         predict_positions = action_indices - 1
@@ -462,23 +485,46 @@ class MTPPOTrainer(Trainer):
         selected_logits = self.model.policy.lm_head(selected_hidden)  # ty: ignore[call-non-callable, unresolved-attribute]  # [num_action_tokens, vocab]
         log_probs = torch.log_softmax(selected_logits, dim=-1)
         next_tokens = input_ids[0, action_indices]
-        action_logprobs = log_probs.gather(1, next_tokens.unsqueeze(-1)).squeeze(-1)
+        return log_probs.gather(1, next_tokens.unsqueeze(-1)).squeeze(-1)
 
+    def _forward_critic_values(
+        self, full_token_ids: list[int], action_mask: list[int]
+    ) -> torch.Tensor:
+        """Critic-only teacher-forced forward pass -- returns action_values, a 1-D tensor of
+        length sum(action_mask). See _forward_policy_logprobs's docstring for why this is a
+        separate method rather than one combined policy+critic forward.
+
+        The critic's head (`.score`) projects to a single scalar per position (num_labels=1), not
+        a vocab-sized dimension, so it never needed the selective-position trick
+        _forward_policy_logprobs uses -- computed over the whole sequence and indexed afterward is
+        fine here.
+        """
+        device = self.model.critic.device  # ty: ignore[unresolved-attribute]
+        input_ids = torch.tensor([full_token_ids], device=device)  # ty: ignore[invalid-argument-type]
+        action_indices = self._action_indices(full_token_ids, action_mask)
         # self.model.critic is untyped/ambiguous to ty for the same reason as self.model.policy
         # above -- `.model` resolves to an unresolved-attribute, and calling the result looks
         # like a call-non-callable. Safe: self.model.critic.model is provably the real
-        # transformer backbone (a PreTrainedModel) at runtime, always callable. The critic's head
-        # (`.score`) projects to a single scalar per position (num_labels=1), not a vocab-sized
-        # dimension, so it never had this method's OOM problem -- computed over the whole
-        # sequence and indexed afterward is fine here.
+        # transformer backbone (a PreTrainedModel) at runtime, always callable.
         critic_hidden = self.model.critic.model(input_ids=input_ids).last_hidden_state  # ty: ignore[call-non-callable, unresolved-attribute]
         # Same root cause one line up: self.model.critic.score is provably a real nn.Linear
         # value head at runtime, always callable, but ty can't see `.score` through self.model's
         # loose base type either.
         critic_values = self.model.critic.score(critic_hidden).squeeze(-1)[0]  # ty: ignore[call-non-callable, unresolved-attribute]  # [seq_len]
-        action_values = critic_values[action_indices]
+        return critic_values[action_indices]
 
-        return action_logprobs, action_values
+    def _forward_logprobs_and_values(
+        self, full_token_ids: list[int], action_mask: list[int]
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Combined policy+critic forward -- thin wrapper used only by _collect_batch's
+        torch.no_grad() "old" pass, where no backward ever runs so there's no graph-retention
+        memory concern from computing both together (see _forward_policy_logprobs's docstring for
+        why _ppo_update's WITH-grad "new" pass calls the two split methods separately instead).
+        """
+        return (
+            self._forward_policy_logprobs(full_token_ids, action_mask),
+            self._forward_critic_values(full_token_ids, action_mask),
+        )
 
     def _collect_batch(self, rows: list[dict]) -> list[dict]:
         """Roll out one episode per row, score it, and compute its frozen GAE inputs.
@@ -566,17 +612,28 @@ class MTPPOTrainer(Trainer):
             # is provably non-None here at runtime.
             self.optimizer.zero_grad()  # ty: ignore[unresolved-attribute]
             for episode in episodes:
-                new_logprobs, new_values = self._forward_logprobs_and_values(
+                # Split into two independent forward+backward passes (policy-only, then
+                # critic-only) instead of one combined pass -- a real fix for a real OOM the live
+                # smoke test caught (see _forward_policy_logprobs's docstring for the full story
+                # and why this is mathematically identical to one combined backward call).
+                #
+                # Pass 1: policy_loss + kl_beta*kl. Uses episode["old_values"] (already detached,
+                # computed under torch.no_grad() in _collect_batch) as a placeholder for
+                # new_values -- compute_ppo_loss's value_loss term only touches critic parameters
+                # through new_values' grad_fn, so a detached stand-in makes that term's
+                # contribution to this backward() call exactly zero, without ever running the
+                # critic's forward pass at all in this call.
+                new_logprobs = self._forward_policy_logprobs(
                     episode["full_token_ids"], episode["action_mask"]
                 )
-                action_mask = torch.ones_like(new_logprobs)
-                loss_dict = compute_ppo_loss(
+                ones_mask = torch.ones_like(new_logprobs)
+                policy_loss_dict = compute_ppo_loss(
                     new_logprobs=new_logprobs,
                     old_logprobs=episode["old_logprobs"],
                     advantages=episode["advantages"],
                     returns=episode["returns"],
-                    new_values=new_values,
-                    action_mask=action_mask,
+                    new_values=episode["old_values"],
+                    action_mask=ones_mask,
                     # self.args.clip_eps, self.args.kl_beta, and self.args.value_loss_coef are
                     # real fields on this file's MTPPOConfig -- same ty-can't-see-through-
                     # Trainer's-base-types root cause as self.args.num_ppo_epochs above; these
@@ -585,9 +642,44 @@ class MTPPOTrainer(Trainer):
                     kl_beta=self.args.kl_beta,  # ty: ignore[unresolved-attribute]
                     value_loss_coef=self.args.value_loss_coef,  # ty: ignore[unresolved-attribute]
                 )
-                (loss_dict["loss"] / len(episodes)).backward()
-                for key in totals:
-                    totals[key] += loss_dict[key].item()
+                (policy_loss_dict["loss"] / len(episodes)).backward()
+
+                # Pass 2: value_loss_coef*value_loss. Uses episode["old_logprobs"] (already
+                # detached) as a placeholder for new_logprobs, for the same reason in reverse --
+                # ratio=exp(old_logprobs-old_logprobs)=1 identically, contributing zero gradient
+                # to the policy, and this call never touches the policy's forward/graph at all.
+                new_values = self._forward_critic_values(
+                    episode["full_token_ids"], episode["action_mask"]
+                )
+                value_loss_dict = compute_ppo_loss(
+                    new_logprobs=episode["old_logprobs"],
+                    old_logprobs=episode["old_logprobs"],
+                    advantages=episode["advantages"],
+                    returns=episode["returns"],
+                    new_values=new_values,
+                    action_mask=ones_mask,
+                    clip_eps=self.args.clip_eps,  # ty: ignore[unresolved-attribute]
+                    kl_beta=self.args.kl_beta,  # ty: ignore[unresolved-attribute]
+                    value_loss_coef=self.args.value_loss_coef,  # ty: ignore[unresolved-attribute]
+                )
+                (value_loss_dict["loss"] / len(episodes)).backward()
+
+                # The real, non-placeholder-contaminated metrics: policy_loss/kl come from pass 1
+                # (real new_logprobs), value_loss comes from pass 2 (real new_values); the
+                # reported "loss" is reconstructed from those three real components rather than
+                # taken from either dict's own "loss" field, since each dict's "loss" scalar value
+                # (not its gradient) still numerically includes the OTHER pass's placeholder term.
+                real_policy_loss = policy_loss_dict["policy_loss"]
+                real_kl = policy_loss_dict["kl"]
+                real_value_loss = value_loss_dict["value_loss"]
+                totals["policy_loss"] += real_policy_loss.item()
+                totals["kl"] += real_kl.item()
+                totals["value_loss"] += real_value_loss.item()
+                totals["loss"] += (
+                    real_policy_loss
+                    + self.args.value_loss_coef * real_value_loss  # ty: ignore[unresolved-attribute]
+                    + self.args.kl_beta * real_kl  # ty: ignore[unresolved-attribute]
+                ).item()
                 num_updates += 1
             # self.optimizer is Optional on Trainer's base class for the same reason noted
             # above this method's self.optimizer.zero_grad() call; still provably a real
