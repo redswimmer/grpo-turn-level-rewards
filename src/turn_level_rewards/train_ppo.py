@@ -455,14 +455,15 @@ class MTPPOTrainer(Trainer):
                 format_and_outcome_reward=format_and_outcome_reward,
                 condition=self.condition,
             )
-            # self.args.gamma and self.args.gae_lambda are real fields on this file's
-            # MTPPOConfig (set in build_ppo_config), but Trainer's base type stub only knows
-            # self.args as the looser `TrainingArguments` -- same ty-can't-see-through-Trainer's
-            # -base-types root cause already noted on self.args.n_max in _rollout_episode above.
-            # Safe to ignore here for the same reason.
             advantages = compute_gae(
                 rewards=per_token_rewards,
                 values=old_values.tolist(),
+                # self.args.gamma and self.args.gae_lambda are real fields on this file's
+                # MTPPOConfig (set in build_ppo_config), but Trainer's base type stub only
+                # knows self.args as the looser `TrainingArguments` -- same ty-can't-see-
+                # through-Trainer's-base-types root cause already noted on self.args.n_max in
+                # _rollout_episode above. Safe to ignore here for the same reason on both of
+                # these adjacent kwargs.
                 gamma=self.args.gamma,  # ty: ignore[unresolved-attribute]
                 lam=self.args.gae_lambda,  # ty: ignore[unresolved-attribute]
             )
