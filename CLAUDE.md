@@ -358,12 +358,25 @@ in one dashboard, rather than separate projects.
 
 ## Roadmap
 
-Design finalized (Option B). Implementation is split into 8 phases, each in its own doc under
-`docs/`, so a fresh agent with no memory of this conversation can pick up any single phase. All 8
-are committed work, not optional stretch goals — Phases 7-8 (PPO/MT-PPO + LLM judge) are a second,
+Design finalized (Option B). Implementation is split into 10 phases, each in its own doc under
+`docs/`, so a fresh agent with no memory of this conversation can pick up any single phase. All 10
+are committed work, not optional stretch goals — Phases 7-8b (PPO/MT-PPO + LLM judge) are a second,
 real comparison alongside the GRPO-OR/GRPO-MR one Phases 1-6 build, not a maybe-someday item.
 **Read this file (CLAUDE.md) in full first, then the specific phase doc, then the previous
 phase's "Handoff notes" section** — that's the actual handoff mechanism between phases.
+
+**Phases 7b and 8b were added on 2026-07-23**, after noticing a real gap: Phase 7's doc (build
+`MTPPOTrainer` + smoke test) and Phase 8's doc (add the LLM judge + smoke test) both stop at
+smoke-test scale — neither ever runs a full training comparison. That mirrors Phase 4 (build +
+smoke test) without a Phase 5/6 analog (full runs + `evaluate.py`/`compare_runs.py`/write-up),
+which would leave this repo without the actual PPO-OR vs MT-PPO comparison — the paper's real
+Table 2 headline result — ever getting produced. 7b and 8b close that gap, mirroring Phases 5+6's
+shape for the PPO track. 7b also folds in a from-scratch request: the current README's charts are
+plain and hard to follow, so 7b adds matplotlib visuals designed to actually tell the comparison's
+story (see `docs/phase-7b-full-ppo-runs.md` for detail; use the `dataviz` skill when implementing
+that task). 8b is intentionally a thin stub for now — its concrete task list depends on
+implementation details (judge combination formula, cost/latency) that don't exist until Phase 8
+lands.
 
 | # | Phase | Doc | Status |
 |---|---|---|---|
@@ -373,8 +386,10 @@ phase's "Handoff notes" section** — that's the actual handoff mechanism betwee
 | 4 | `train.py` + live smoke test | `docs/phase-4-training-smoke-test.md` | **Done** — `scripts/verify_phase4.py` passes; live smoke test succeeded for both conditions (real tool calls, real retrieved passages, `turn_reward` confirmed genuinely nonzero, zero trackio alerts); see phase doc's Handoff notes for three real bugs the smoke test caught (a `GRPOConfig` divisibility constraint, two missing runtime dependencies, a docstring-format bug in Phase 2's `env.py`) and a CUDA OOM fixed with `gradient_checkpointing=True` |
 | 5 | Full training runs (both conditions) | `docs/phase-5-full-training-runs.md` | **Done** — both conditions completed 300/300 steps, checkpoints saved and loadable, no unresolved alerts; see phase doc's Handoff notes for two real bugs live runs caught (an OOM survived by the first micro-batching fix, then a silent policy collapse from a `steps_per_generation`/`gradient_accumulation_steps` mixup), an unrelated infra fix (transient systemd cgroup killing long-running processes, worked around with `systemd-run`), the resulting 150-distinct-training-prompts figure and why the paper's own text leaves that ambiguous, and first training-batch results (both conditions show real learning; `turn_level` directionally ahead of `outcome_only` on EM/F1, not yet a rigorous claim pending Phase 6's held-out eval) |
 | 6 | `evaluate.py` + `compare_runs.py` + write-up | `docs/phase-6-evaluation-comparison.md` | **Fully done, all follow-ups complete** — original run (seed42/300steps) was inconclusive (3 of 4 "more training needed?" criteria triggered); the symmetric re-run (seed123/600steps, both conditions, same larger budget + new seed) resolved it: `turn_level` shows a real, held-out-confirmed advantage over `outcome_only` (EM 0.307 vs 0.242, F1 0.399 vs 0.343), and `retrieval_fraction` rose instead of declining (0.40→0.57). Three follow-up reward-design experiments then ran against this baseline, none of which improved on it: `length_penalty` collapsed `outcome_only` completely and cost `turn_level` a mild real amount of accuracy; `search_count_penalty` (a non-paper-fidelity GRPO experiment, borrowing the paper's PPO-context mechanism) failed even more severely for `outcome_only` and cost `turn_level` real accuracy despite a partial training-time recovery; `remove-search-cap-prompt` (an isolating control, no penalty) confirmed the `search_count_penalty` failures were caused by the penalty term itself, not by losing prompt guidance — that alone costs `outcome_only` a small amount (over-searching) and costs `turn_level` nothing at all. See phase doc's Handoff notes for full numbers per experiment, the `beta=0`-matches-the-paper correction, the cross-experiment synthesis (`outcome_only`'s narrow reward is broadly fragile to added penalties; `turn_level`'s extra `turn_reward` term provides real but incomplete protection), and two infrastructure incidents documented honestly (a disk-space exhaustion resolved with explicit user-approved checkpoint deletion, and an unexplained external process kill that succeeded cleanly on retry) |
-| 7 | Multi-turn PPO / MT-PPO (custom trainer, deterministic rewards) | `docs/phase-7-mt-ppo.md` | Not started — design complete, see `docs/superpowers/specs/2026-07-05-phase-7-mt-ppo-design.md` |
-| 8 | LLM-as-judge reward (Bedrock + gpt-oss), on top of Phase 7 | `docs/phase-8-llm-judge.md` | Not started |
+| 7 | Multi-turn PPO / MT-PPO (custom trainer, deterministic rewards): build + smoke test | `docs/phase-7-mt-ppo.md` | **Done** — `MTPPOTrainer` built and live-smoke-tested for both `--condition ppo` and `--condition mt_ppo` (real tool calls, real retrieved passages, correct Eq. 9 reward placement confirmed by direct observation — `mt_ppo`'s `R^I` nonzero exactly at a real gold-title hit (now backed by a real `train_log.jsonl` line, not just a removed debug print), `ppo`'s always 0 there — finite non-frozen critic values, `tests/unit/test_train_ppo.py`/`scripts/verify_phase7.py` passing); see phase doc's Handoff notes for five real bugs the smoke test caught, the `tool_call_id`/answerless-completion findings, a same-seed repeatability result (reward/retrieval_fraction reproduce exactly; raw loss internals do not) — **and a real, verified OOM-rate fix**: `flash-linear-attention==0.4.1` is now a pinned dependency (`causal-conv1d` deliberately excluded — its own compiled CUDA extension segfaulted on this machine; the memory win comes from `flash-linear-attention` alone), cutting intermittent OOM from ~50% to ~12.5% across 8 real end-to-end runs, with the residual failures staying the safe/catchable `torch.OutOfMemoryError` kind, not crashes |
+| 7b | Full PPO/MT-PPO training runs + evaluation + comparison + matplotlib visuals | `docs/phase-7b-full-ppo-runs.md` | Not started — added 2026-07-23 to close the gap above; mirrors Phases 5+6's shape for the PPO track, plus new matplotlib-driven visuals for the write-up |
+| 8 | LLM-as-judge reward (Bedrock + gpt-oss), on top of Phase 7 (build + smoke test) | `docs/phase-8-llm-judge.md` | Not started |
+| 8b | Full judge-augmented training runs + evaluation + comparison | `docs/phase-8b-full-judge-runs.md` | Not started — added 2026-07-23 as a thin stub; concrete scope depends on Phase 8's actual judge-combination formula and observed cost/latency, not yet known |
 
 Each phase doc is self-contained: goal, prerequisites (= previous phase's exit criteria), a task
 checklist, exit criteria, and a **Handoff notes** section the executing agent fills in before

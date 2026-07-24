@@ -312,3 +312,9 @@ def test_get_reward_funcs_both_penalties_composable():
         "length_penalty",
         "search_count_penalty",
     ]
+
+
+def test_turn_reward_scale_constant_matches_turn_reward_behavior():
+    from turn_level_rewards.rewards import TURN_REWARD_SCALE
+
+    assert TURN_REWARD_SCALE == 0.4

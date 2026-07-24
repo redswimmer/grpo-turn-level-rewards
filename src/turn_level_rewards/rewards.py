@@ -14,6 +14,8 @@ from turn_level_rewards.metrics import exact_match, f1_score
 Completion = list[dict[str, Any]]
 LogMetric = Callable[[str, float], None]
 
+TURN_REWARD_SCALE = 0.4
+
 _ANSWER_RE = re.compile(r"<answer>(.+?)</answer>", re.DOTALL)
 
 
@@ -93,7 +95,7 @@ def turn_reward(
     """
     rewards = []
     for environment in environments:
-        rewards.append(0.4 * environment.retrieval_fraction)
+        rewards.append(TURN_REWARD_SCALE * environment.retrieval_fraction)
         log_metric("retrieval_fraction", environment.retrieval_fraction)
     return rewards
 
