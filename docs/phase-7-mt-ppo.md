@@ -253,6 +253,89 @@ issue. The residual-OOM note above (root cause: Qwen3.5's memory-hungry linear-a
 not the driver/library mismatch) still stands as the operative guidance for Phase 7b; this
 reboot's clean `nvidia-smi` driver match was not sufficient by itself to eliminate the OOM.
 
+**OOM root-cause fix, attempted and resolved (2026-07-23, same session as the reboot above) — this
+is a real fix, not deferred to Phase 7b.** After the reboot/re-verification above, the user pushed
+back on treating "roughly half the runs OOM, but retrying eventually works" as an acceptable smoke
+test result — correctly: a smoke test's job is to demonstrate the trainer can actually run, not
+that it can be coaxed into running via retries. That prompted a real, from-scratch investigation
+of the root cause rather than accepting the "Phase 7b's problem" framing, with several genuine
+false starts along the way, documented honestly:
+
+1. **`nvidia-cuda-toolkit` (12.4, from Ubuntu's default apt repo) does not work.** PyTorch's own
+   `torch.utils.cpp_extension._check_cuda_version` hard-fails (not just warns) when `nvcc`'s major
+   CUDA version differs from `torch.version.cuda`'s (12 vs. this repo's `torch==2.12.1+cu130`'s
+   13). Confirmed by reading PyTorch's actual source, not assumed.
+2. **`cuda-nvcc-13-1`** (from NVIDIA's own apt repo, already configured on this machine, matching
+   torch's major version 13) installs and satisfies PyTorch's version check (only a minor-version
+   warning, not an error) — but building `causal-conv1d` against it still failed, with a *different*
+   error: `error: exception specification is incompatible... "rsqrt"` / `"rsqrtf"`, from
+   `/usr/local/cuda/include/crt/math_functions.h`. Switching the host compiler to the
+   already-installed `gcc-13` (via `CC`/`CXX` env vars) did **not** help — confirmed this is a
+   glibc-header-vs-CUDA-header conflict (this machine's glibc declares `rsqrt`/`rsqrtf` with
+   `noexcept(true)`; CUDA 13.1's own header doesn't), independent of which gcc frontend invokes
+   the same system glibc headers.
+3. **Researched this properly (web search, not guessed) before proceeding further**: confirmed via
+   NVIDIA developer forums, an [SOLVED] `llama.cpp` issue, and other independent reports that this
+   is a known, real compatibility gap between very new glibc versions and CUDA 13.0/13.1's shipped
+   headers — not specific to this repo's setup. **CUDA 13.2 fixes it natively** (introduces a
+   `_NV_RSQRT_SPECIFIER` macro gated on glibc version), but 13.2 is not yet packaged in this
+   machine's configured apt repo (confirmed after an `apt-get update` refresh — still only 13.1
+   available). The documented workaround for 13.1: patch
+   `/usr/local/cuda/include/crt/math_functions.h` to add `noexcept(true)` to the `rsqrt`/`rsqrtf`
+   declarations by hand.
+4. **Applied that header patch** (backed up first, reverted afterward — see below) and successfully
+   built+installed `causal-conv1d` against it. **This made things worse, not better**: every real
+   training run now **segfaulted** inside `causal_conv1d`'s own compiled CUDA extension
+   (`causal_conv1d_fwd_cpp`), before generation even started — confirmed with a minimal repro
+   (`faulthandler.enable()` + a single forward pass) pointing the crash at exactly that function.
+   A segfault is strictly worse than the OOM it was meant to fix: OOM raises a catchable Python
+   exception; a segfault kills the process with no chance to retry. Root cause: a locally-compiled
+   CUDA extension needs to match torch's *exact* build toolchain (compiler, CUDA minor version, ABI
+   flags) to be safe, and a hand-patched local build against `nvcc` 13.1 (vs. torch's own official
+   wheel, built by a different pipeline against `cu130`) didn't. **Immediately uninstalled
+   `causal-conv1d`/`flash-linear-attention`/`fla-core`/`einops`** and confirmed the model loads back
+   onto the known-working (if OOM-prone) fallback path, all 117 unit tests still passing.
+5. **The actual working fix, found by reading this repo's real `transformers` source directly, not
+   assumed**: `Qwen3_5GatedDeltaNet`'s `causal_conv1d_fn` and `chunk_gated_delta_rule` are two
+   *independent* optional-acceleration attributes (`modeling_qwen3_5.py`), not an all-or-nothing
+   pair. When `causal_conv1d_fn` is `None`, the fallback is a trivial, cheap
+   `F.silu(self.conv1d(...))` — not a meaningful memory cost. The real memory-hungry piece is
+   `chunk_gated_delta_rule` vs. its `torch_chunk_gated_delta_rule` reference fallback, and
+   `flash-linear-attention` alone provides the fast version of that — **`causal-conv1d`'s own
+   compiled extension was never actually load-bearing for the memory problem**, and it's the piece
+   that's risky to build locally (a real, documented compile toolchain match requirement) for
+   negligible benefit. This exactly matches an official Axolotl guide for the sibling
+   Qwen3-Next architecture, found via search: `uv pip uninstall causal-conv1d && uv pip install
+   flash-linear-attention==0.4.1` (a specific *older* pinned version — a separate, independently
+   confirmed bug makes `flash-linear-attention==0.5.0` corrupt Qwen3.5's output in some
+   configurations, so pin exactly `0.4.1`, not a floor).
+6. **Verified this fix for real, not assumed**: installed only `flash-linear-attention==0.4.1`
+   (pure Python + Triton — installed in milliseconds, zero compilation, so none of the ABI risk
+   that broke `causal-conv1d` applies). Confirmed directly (not via the printed startup warning,
+   which is misleadingly all-or-nothing) that `chunk_gated_delta_rule` is bound to the real FLA
+   function (not the `torch_` fallback) by inspecting the instantiated module's attributes.
+   Then ran **8 real end-to-end training runs** (4× `ppo`, 4× `mt_ppo`, same tiny smoke scale):
+   **7 of 8 succeeded**; the one failure was a clean, catchable `torch.OutOfMemoryError` (not a
+   crash) — an intermittent-OOM rate of **~12.5%**, down from the ~50% baseline, and critically
+   still the safe/retryable failure mode, not a regression to segfaults. Output quality across all
+   8 runs was healthy: finite losses moving realistically, sensible `retrieval_fraction` values
+   including a full `1.0` (both gold titles surfaced in one episode), no NaN/Inf, no corrupted
+   generations (confirming the `0.4.1` pin avoided the known `0.5.0` corruption bug).
+7. **Landed the fix properly**: added `flash-linear-attention==0.4.1` as an actual pinned
+   dependency in `pyproject.toml` (not a one-off local `pip install`) — `causal-conv1d` is
+   deliberately *not* a dependency, with a comment explaining why. Reverted the CUDA header patch
+   back from its `.bak` (confirmed via diff before deleting the backup) — it's not needed by
+   anything once `causal-conv1d` is gone, and the system is now fully back to its
+   pre-investigation state except for the one real, verified, lasting fix (the FLA pin).
+
+**Updated residual-risk framing for Phase 7b**: the OOM risk is **substantially reduced, not fully
+eliminated** — plan for an occasional (~1-in-8, at this tiny scale; untested at Phase 7b's real
+scale) catchable OOM during full runs, e.g. a simple retry-the-step wrapper, rather than assuming
+either "fully fixed" or "unaddressed." The three options previously listed in the older residual-
+finding note above (install a JDK-like CUDA toolkit + fast-attention packages; accept short bounded
+rollouts; explore 8-bit optimizer states/CPU offload) are superseded by this section — the first
+option is now done, verified, and pinned.
+
 **For Phase 8 (LLM judge, built on top of a working Phase 7)**: the `outcome_reward` call in
 `_collect_batch` is a single, clearly isolated call site (`outcome_r = outcome_reward([completion],
 [row["golden_answers"]])[0]`) — swapping in an LLM-judge-based reward function there should be a

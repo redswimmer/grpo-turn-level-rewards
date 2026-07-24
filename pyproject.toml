@@ -11,6 +11,10 @@ requires-python = ">=3.13"
 dependencies = [
     "datasets>=5.0.0",
     "fastapi>=0.139.0",
+    "flash-linear-attention==0.4.1",  # exact pin: 0.5.0 corrupts Qwen3.5 output (see phase-7-mt-ppo.md);
+                                       # causal-conv1d deliberately NOT installed alongside it -- its own
+                                       # compiled CUDA extension caused real segfaults on this machine,
+                                       # and the conv1d fallback it would optimize is cheap regardless
     "huggingface-hub>=1.22.0",
     "jmespath>=1.0.1",
     "matplotlib>=3.10.0",
