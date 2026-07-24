@@ -122,9 +122,12 @@ construction, and full trainer integration were deliberately left to this step).
    retrieval-server/infra failure inside `environment.search()` itself still surfaces as a real
    crash.
 
-**Residual finding, NOT fully fixed (important for Phase 7b): intermittent OOM remains, roughly
-50% of runs at this exact `--train-size 4 --max-steps 2 --num-rollouts-per-step 2` scale, for
-BOTH conditions equally** (initially looked `mt_ppo`-specific during investigation, but a later
+**Residual finding as first documented (superseded below — see "OOM root-cause fix, attempted and
+resolved" further down this section for what actually happened; left here verbatim for the
+historical record of what was tried first). NOT fully fixed (important for Phase 7b): intermittent
+OOM remains, roughly 50% of runs at this exact `--train-size 4 --max-steps 2
+--num-rollouts-per-step 2` scale, for BOTH conditions equally** (initially looked `mt_ppo`-specific
+during investigation, but a later
 full-run check showed `ppo` fails at a similar rate — it's driven by random rollout length via
 `do_sample=True`, not anything condition-specific; `mt_ppo`'s extra `turn_reward` term is a tiny
 scalar addition, irrelevant to memory). Root cause is environmental, not a further code bug:
